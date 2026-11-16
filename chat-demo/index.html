@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>물품 대여 거래 채팅</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef3f2;color:#18332e;font:16px system-ui,sans-serif}
+main{max-width:720px;margin:32px auto;padding:0 16px}h1{font-size:1.65rem}
+section{background:white;padding:20px;border:1px solid #c7d8d4;border-radius:14px}
+label{display:block;margin:12px 0 4px}button,input,select,textarea{font:inherit;border-radius:7px;padding:9px}
+input,select,textarea{border:1px solid #92aaa3;width:100%}button{border:0;background:#185948;color:white;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}#login button{margin-top:14px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+#messages{display:flex;flex-direction:column;gap:10px;min-height:230px;max-height:45vh;overflow:auto;list-style:none;margin:12px 0;padding:10px;background:#f4f7f6;border-radius:8px}
+#messages li{align-self:flex-start;background:#e3ece9;border-radius:10px;padding:8px 12px;max-width:88%;overflow-wrap:anywhere}
+#messages li.mine{align-self:flex-end;background:#cfeee2}#messages small{display:block;color:#35554d;margin-bottom:4px}
+.body{white-space:pre-wrap;margin:0}textarea{min-height:66px;resize:vertical}#status{min-height:1.5em;color:#8c352d}
+</style>
+<script src="/app.js" defer></script>
+</head>
+<body><main>
+<h1>물품 대여 거래 채팅</h1>
+<section id="login-panel">
+  <form id="login">
+    <label for="username">아이디</label><input id="username" name="username" required autocomplete="username">
+    <label for="password">비밀번호</label><input id="password" name="password" type="password" required autocomplete="current-password">
+    <button>로그인</button>
+  </form>
+</section>
+<section id="chat-panel" hidden>
+  <div class="top"><strong id="who"></strong><button id="logout" type="button">로그아웃</button></div>
+  <label for="room">확정된 거래</label><select id="room"></select>
+  <ol id="messages" aria-label="거래 채팅 기록"></ol>
+  <form id="send">
+    <label for="message">메시지</label>
+    <textarea id="message" maxlength="1000" required placeholder="대여 일정이나 장소를 문의하세요."></textarea>
+    <button id="send-button">보내기</button>
+  </form>
+</section>
+<p id="status" role="status"></p>
+</main></body>
+</html>
