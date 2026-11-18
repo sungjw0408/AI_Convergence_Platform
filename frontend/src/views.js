@@ -196,26 +196,71 @@ export function tradePage(rental, item, role) {
   </div>`;
 }
 
-export function chatPage(rentals, catalog, role) {
+const partnerName = (rental, role) =>
+  people[role === rental.renterId ? rental.lenderId : rental.renterId]?.name ?? "거래 상대";
+const chatDay = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" });
+const chatClock = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2-digit" });
+const messageDate = (message) => Number.isFinite(message?.sentAt)
+  && Number.isFinite(new Date(message.sentAt).getTime()) ? new Date(message.sentAt) : null;
+const chatAvatar = () => `<span class="chat-avatar" aria-hidden="true">${icon("user")}</span>`;
+
+export function chatPage(rentals, catalog, role, threads, canChat) {
   const conversations = rentals.filter((rental) => (rental.renterId === role || rental.lenderId === role)
-    && ["confirmed", "handover", "active", "checking", "disputed", "complete"].includes(rental.status));
-  return pageHeader("채팅") + `<div class="content">${conversations.length
-    ? conversations.map((rental) => rentalRow(rental, catalog(rental.itemId), "chat")).join("")
+    && canChat(rental)).map((rental) => ({ rental, last: threads[rental.id]?.at(-1) }))
+    .sort((a, b) => (messageDate(b.last)?.getTime() ?? 0) - (messageDate(a.last)?.getTime() ?? 0));
+  return pageHeader("채팅") + `<div class="content chat-list">${conversations.length
+    ? conversations.map(({ rental, last }) => {
+      const item = catalog(rental.itemId);
+      const time = messageDate(last);
+      return `<a class="chat-list-row" href="#chat/${escape(rental.id)}">
+        ${chatAvatar()}
+        <div class="chat-list-copy">
+          <strong>${escape(partnerName(rental, role))}</strong>
+          <span class="chat-list-item">${escape(item.title)}</span>
+          <p>${last ? (last.sender === role ? "나: " : "") + escape(last.text) : "아직 메시지가 없어요."}</p>
+        </div>
+        ${time ? `<time datetime="${time.toISOString()}">${localDay(time) === localDay() ? chatClock.format(time) : chatDay.format(time)}</time>` : ""}
+      </a>`;
+    }).join("")
     : empty("아직 대화가 없어요", "예약이 확정되면 상대와 인도 장소를 조율할 수 있어요.")}</div>`;
 }
 
 export function conversationPage(rental, item, messages, role) {
-  return pageHeader(escape(item.title), "#chat") + `<div class="content stack">
-    <a class="text-link" href="#trade/${rental.id}">거래 상세 보기 ${icon("right")}</a>
-    <div class="messages" aria-live="polite">${messages.length ? messages.map((message) => `
-      <div class="message${message.sender === role ? " outgoing" : ""}">
-        <small>${people[message.sender].name}</small><p>${escape(message.text)}</p>
-      </div>`).join("") : empty("첫 메시지를 보내보세요", "인도 시간과 만날 장소를 정해보세요.")}</div>
-    <form class="compose" data-form="message" data-id="${rental.id}">
-      <input name="message" maxlength="350" aria-label="메시지" placeholder="메시지 입력" required>
-      <button type="submit" class="button primary">보내기</button>
+  const partner = escape(partnerName(rental, role));
+  let lastDay = null;
+  const bubbles = messages.map((message) => {
+    const time = messageDate(message);
+    const day = time ? localDay(time) : null;
+    const divider = day && day !== lastDay
+      ? `<div class="chat-day"><time datetime="${day}">${chatDay.format(time)}</time></div>` : "";
+    lastDay = day;
+    const mine = message.sender === role;
+    return divider + `<div class="chat-message${mine ? " outgoing" : ""}">
+      ${mine ? "" : chatAvatar()}
+      <div class="chat-message-content">
+        <span class="chat-sender${mine ? " sr-only" : ""}">${mine ? "나" : partner}</span>
+        <div class="chat-bubble-line"><p class="chat-bubble">${escape(message.text)}</p>
+        ${time ? `<time datetime="${time.toISOString()}">${chatClock.format(time)}</time>` : ""}</div>
+      </div>
+    </div>`;
+  }).join("");
+  return `<section class="conversation" aria-labelledby="chat-partner">
+    <header class="page-header chat-header">
+      <a class="icon-button" href="#chat" aria-label="채팅 목록으로">${icon("back")}</a>
+      ${chatAvatar()}<h1 id="chat-partner">${partner}</h1>
+    </header>
+    <a class="chat-item" href="#trade/${escape(rental.id)}">
+      ${image(item, "trade-thumbnail", "")}
+      <span><strong>${escape(item.title)}</strong><small>${dates(rental.start, rental.end)}</small></span>
+      ${badge(rental.status)}${icon("right")}
+    </a>
+    <div class="chat-history" role="log" aria-label="대화 내역" tabindex="0">${bubbles
+      || empty("첫 메시지를 보내보세요", "인도 시간과 만날 장소를 정해보세요.")}</div>
+    <form class="compose chat-compose" data-form="message" data-id="${escape(rental.id)}">
+      <input name="message" maxlength="350" aria-label="메시지" placeholder="메시지 보내기" required>
+      <button type="submit" class="button primary" aria-label="보내기">${icon("send")}</button>
     </form>
-  </div>`;
+  </section>`;
 }
 
 export function profilePage(role, savedCount, listingCount) {
