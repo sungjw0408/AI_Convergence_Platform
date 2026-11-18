@@ -1,4 +1,10 @@
 const shapes = {
+  tent: '<path d="m3 21 9-17 9 17H3Zm5 0 4-8 4 8M10 2l3 5m1-5-3 5"/>',
+  camera: '<path d="m8 6 2-3h4l2 3h4a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4Z"/><circle cx="12" cy="13" r="4"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+  tool: '<path d="M14 6a5 5 0 0 0-6 6L3 17a2.8 2.8 0 0 0 4 4l5-5a5 5 0 0 0 6-6l-3 3-4-4 3-3Z"/>',
+  digital: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
+  living: '<path d="M5 11V7a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v4M5 18v3m14-3v3"/><path d="M5 11a2 2 0 0 0-3 2v5h20v-5a2 2 0 0 0-4 0v1H6v-1a2 2 0 0 0-1-2Z"/>',
   mark: '<circle cx="9" cy="12" r="7"/><circle cx="17" cy="13" r="7"/>',
   pin: '<path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
   chevronDown: '<path d="m6 9 6 6 6-6"/>',

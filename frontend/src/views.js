@@ -1,5 +1,5 @@
-import { icon } from "./icons.js";
-import { categories, localDay, people, rentalDays, statuses } from "./model.js";
+import { icon } from "./icons.js?v=rento-home-5-ren";
+import { categories, localDay, people, rentalDays, statuses } from "./model.js?v=rento-home-5-ren";
 
 export function escape(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -33,7 +33,7 @@ export function listingRows(items, isFavorite, availability) {
     const status = availability(item);
     return `<article class="listing">
       <a class="listing-link" href="#item/${item.id}">
-        ${image(item, "listing-photo")}
+        ${image(item, "listing-photo", item.title)}
         <div class="listing-info">
           <h3>${escape(item.title)}</h3>
           <p class="location">${escape(item.neighborhood)}${item.distance ? ` · ${escape(item.distance)}` : ""}</p>
@@ -49,26 +49,32 @@ export function listingRows(items, isFavorite, availability) {
 }
 
 export function home({ area, query, category, date, maxPrice, rows, unread }) {
+  const categoryIcons = { "전체": "grid", "공구": "tool", "디지털": "digital", "생활용품": "living", "캠핑·레저": "tent" };
   const filterSummary = [date.start && dates(date.start, date.end), maxPrice !== null && `하루 ${won(maxPrice)} 이하`].filter(Boolean).join(" · ");
   return `
+    <div class="home-hero">
     <header class="home-header">
-      <h1 class="brand">${icon("mark")}<span>이웃창고</span></h1>
+      <h1 class="brand" aria-label="렌토 RENTO"><span class="brand-symbol">${icon("mark")}</span><span>RENTO</span></h1>
       <div class="header-actions">
         <button class="area-button" data-action="area" aria-label="동네 변경">${icon("pin")}<span>${area}</span>${icon("chevronDown")}</button>
         <button class="icon-button notification" data-action="notices" aria-label="알림">${icon("bell")}${unread ? '<i aria-label="새 알림"></i>' : ""}</button>
       </div>
     </header>
-    <div class="home-main">
+    <div class="hero-content">
+      <div class="home-intro"><h2>사는 대신 빌려요,</h2><p class="brand-slogan" lang="en"><span class="slogan-ren">REN</span><span class="slogan-t">t</span>, <span class="slogan-to">TO</span>gether!</p><p class="hero-description">우리 동네에서 시작되는 새로운 공유 라이프</p></div>
       <label class="search">${icon("search")}<input id="search" type="search" aria-label="물품 검색" placeholder="어떤 물건을 빌릴까요?" value="${escape(query)}"></label>
+    </div>
+    </div>
+    <div class="home-main">
       <div class="categories" aria-label="물품 분류">${categories.map((name) =>
-        `<button type="button" class="chip" aria-pressed="${name === category}" data-action="category" data-id="${name}">${name}</button>`).join("")}</div>
-      <div class="shortcuts">
-        <button data-action="filter-dates">${icon("calendar")}<span>${date.start ? "대여 날짜 변경" : "대여 날짜 선택"}</span></button>
-        <button data-action="recommend">${icon("sparkle")}<span>AI에게 물어보기</span></button>
+        `<button type="button" class="chip" aria-pressed="${name === category}" data-action="category" data-id="${name}">${icon(categoryIcons[name])}<span>${name}</span></button>`).join("")}</div>
+      <div class="shortcuts home-shortcuts">
+        <button type="button" class="rental-date-button" data-action="filter-dates"><span class="date-icon">${icon("calendar")}</span><span class="date-copy"><strong>언제 빌릴까요?</strong><span>${date.start ? `${dates(date.start, date.end)} · 변경하기` : "대여할 날짜를 선택해 주세요"}</span></span>${icon("right")}</button>
+        <button type="button" class="ai-recommend-card" data-action="recommend">${icon("sparkle")}<span class="ai-recommend-copy"><strong>뭘 빌려야 할지 고민된다면?</strong><span>렌토 AI가 필요한 물건을 찾아드려요</span></span>${icon("right")}</button>
       </div>
       ${filterSummary ? `<div class="applied-filter">${filterSummary}<button class="icon-button" data-action="clear-filters" aria-label="날짜 및 가격 필터 지우기">${icon("close")}</button></div>` : ""}
       <section aria-labelledby="listing-title">
-        <div class="feed-title"><h2 id="listing-title">주변 대여 물품</h2><a class="button primary add-link" href="#new">${icon("plus")}물품 등록</a></div>
+        <div class="feed-title"><h2 id="listing-title">우리 동네 대여 물품</h2><a class="button primary add-link" href="#new">${icon("plus")}물품 등록</a></div>
         <div id="listings" aria-live="polite">${rows}</div>
       </section>
     </div>`;
@@ -199,34 +205,46 @@ export function tradePage(rental, item, role) {
 export function chatPage(rentals, catalog, role) {
   const conversations = rentals.filter((rental) => (rental.renterId === role || rental.lenderId === role)
     && ["confirmed", "handover", "active", "checking", "disputed", "complete"].includes(rental.status));
-  return pageHeader("채팅") + `<div class="content">${conversations.length
-    ? conversations.map((rental) => rentalRow(rental, catalog(rental.itemId), "chat")).join("")
-    : empty("아직 대화가 없어요", "예약이 확정되면 상대와 인도 장소를 조율할 수 있어요.")}</div>`;
+  return pageHeader("채팅") + `<div class="content chat-list"><p class="page-description">이웃과 나누는 대화, 더 편안한 거래</p>${conversations.length
+    ? conversations.map((rental) => {
+      const item = catalog(rental.itemId);
+      const partner = people[rental.renterId === role ? rental.lenderId : rental.renterId];
+      return `<a class="conversation-row" href="#chat/${rental.id}">
+        <span class="avatar">${icon("user")}</span>
+        <div class="conversation-summary"><div class="conversation-heading"><strong>${escape(partner.name)}</strong>${badge(rental.status)}</div>
+          <p>${escape(item.title)}</p><small>${dates(rental.start, rental.end)}</small></div>
+        ${image(item, "chat-thumbnail", item.title)}
+      </a>`;
+    }).join("")
+    : `<div class="empty-icon">${icon("chat")}</div>${empty("아직 대화가 없어요", "예약이 확정되면 상대와 인도 장소를 조율할 수 있어요.")}<a class="button secondary empty-action" href="#home">빌릴 물품 둘러보기</a>`}</div>`;
 }
 
 export function conversationPage(rental, item, messages, role) {
-  return pageHeader(escape(item.title), "#chat") + `<div class="content stack">
-    <a class="text-link" href="#trade/${rental.id}">거래 상세 보기 ${icon("right")}</a>
+  return pageHeader(escape(item.title), "#chat") + `<div class="content stack conversation-content">
+    <a class="conversation-item" href="#trade/${rental.id}">${image(item, "trade-thumbnail", item.title)}<div><strong>${escape(item.title)}</strong><p>${won(item.price)} <span>/ 일</span></p></div>${icon("right")}</a>
+    <p class="conversation-notice">${icon("check")}약속한 시간과 장소를 함께 확인해 주세요.</p>
     <div class="messages" aria-live="polite">${messages.length ? messages.map((message) => `
       <div class="message${message.sender === role ? " outgoing" : ""}">
         <small>${people[message.sender].name}</small><p>${escape(message.text)}</p>
       </div>`).join("") : empty("첫 메시지를 보내보세요", "인도 시간과 만날 장소를 정해보세요.")}</div>
     <form class="compose" data-form="message" data-id="${rental.id}">
-      <input name="message" maxlength="350" aria-label="메시지" placeholder="메시지 입력" required>
+      <input name="message" maxlength="350" aria-label="메시지" placeholder="이웃에게 메시지를 보내보세요" required>
       <button type="submit" class="button primary">보내기</button>
     </form>
   </div>`;
 }
 
 export function profilePage(role, savedCount, listingCount) {
-  return pageHeader("마이") + `<div class="content stack">
-    <div class="profile"><div class="avatar">${icon("user")}</div><div><h2>${people[role].name}</h2><p class="muted">데모 프로필</p></div></div>
-    <div class="menu-list">
+  return pageHeader("내 정보") + `<div class="content stack profile-content">
+    <div class="profile"><div class="avatar">${icon("user")}</div><div><p class="eyebrow">반가워요!</p><h2>${people[role].name}님</h2><p class="muted">${people[role].neighborhood} · 데모 프로필</p></div></div>
+    <div class="profile-stats"><a href="#saved"><strong>${savedCount}</strong><span>관심 물품</span></a><a href="#my-listings"><strong>${listingCount}</strong><span>등록한 물품</span></a><a href="#rentals">${icon("calendar")}<span>대여 내역</span></a></div>
+    <section class="profile-section"><h2>나의 활동</h2><div class="menu-list">
+      <a href="#rentals">${icon("calendar")}대여 내역${icon("right")}</a>
       <a href="#saved">${icon("heart")}관심 물품<span>${savedCount}개</span>${icon("right")}</a>
       <a href="#my-listings">${icon("photo")}내가 올린 물품<span>${listingCount}개</span>${icon("right")}</a>
       <a href="#membership">${icon("sparkle")}구독 혜택${icon("right")}</a>
-    </div>
-    <section class="stack compact">
+    </div></section>
+    <section class="stack compact profile-section demo-settings">
       <h2>데모 프로필 전환</h2>
       <div class="segments">${Object.entries(people).map(([id, person]) => `
         <button data-action="role" data-id="${id}" aria-pressed="${role === id}">${person.name}</button>`).join("")}</div>
