@@ -1,10 +1,11 @@
+import { comparePhotos } from "./compare.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import {
   catalog, categories, findAvailability, localDay, neighborhoods, people, readState,
   rentalDays, suggestedFields, writeState,
 } from "./model.js?v=rento-home-5-ren";
 import {
-  chatPage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
+  chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalsPage, tradePage, won,
 } from "./views.js?v=rento-home-5-ren";
@@ -17,6 +18,27 @@ const state = readState();
 const filters = { query: "", category: "전체", date: {}, maxPrice: null };
 let direction = state.role === "lender" ? "out" : "in";
 let toastTimeout;
+
+const samplePair = { before: "./assets/proof-before.webp", after: "./assets/proof-after.webp" };
+let demo = { ...samplePair, custom: false };
+const comparisonFeedback = new Map();
+
+async function analyzeTrade(rental) {
+  if (comparisonFeedback.get(rental.id)?.busy) return;
+  comparisonFeedback.set(rental.id, { busy: true, message: "사진을 정렬하고 변화 위치를 찾고 있어요." });
+  const refresh = () => {
+    if (route()[0] === "trade" && route()[1] === rental.id) render();
+  };
+  refresh();
+  try {
+    rental.photoAnalysis = await comparePhotos(rental.before, rental.after);
+    comparisonFeedback.delete(rental.id);
+    save();
+  } catch (error) {
+    comparisonFeedback.set(rental.id, { message: error.message });
+  }
+  refresh();
+}
 
 const allItems = () => [...catalog, ...state.listings];
 const itemById = (id) => allItems().find((item) => item.id === id);
@@ -85,13 +107,14 @@ function render() {
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
   else if (page === "trade") {
     const rental = rentalById(id);
-    if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role);
+    if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id));
   } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role, state.messages, chatAllowed);
   else if (page === "chat") {
     const rental = rentalById(id);
     if (isParty(rental) && chatAllowed(rental)) content = conversationPage(rental, itemById(rental.itemId), state.messages[id] ?? [], role);
   } else if (page === "profile") content = profilePage(role, allItems().filter((item) => isFavorite(item.id)).length,
     allItems().filter((item) => item.owner === role).length);
+  else if (page === "compare") content = comparePage(demo);
   else if (page === "membership") content = membershipPage();
   else if (page === "saved" || page === "my-listings") {
     const items = allItems().filter((item) => page === "saved" ? isFavorite(item.id) : item.owner === role);
@@ -103,7 +126,7 @@ function render() {
   const history = screen.querySelector(".chat-history");
   if (history) history.scrollTop = history.scrollHeight;
 
-  const parent = ({ item: "home", new: "home", trade: "rentals", saved: "profile", membership: "profile", "my-listings": "profile" })[page] ?? page;
+  const parent = ({ compare: "profile", item: "home", new: "home", trade: "rentals", saved: "profile", membership: "profile", "my-listings": "profile" })[page] ?? page;
   const tabs = [
     ["home", "home", "홈"], ["rentals", "calendar", role === "admin" ? "분쟁 검토" : "내 대여"],
     ["chat", "chat", "채팅"], ["profile", "user", "내 정보"],
@@ -307,7 +330,7 @@ document.addEventListener("input", (event) => {
   }
 });
 
-async function readPhoto(file) {
+async function readPhoto(file, evidence = false) {
   if (!file?.size) return "";
   if (!file.type.startsWith("image/") || file.size > 12 * 1024 * 1024) {
     throw new Error("12MB 이하 이미지 파일을 선택해 주세요.");
@@ -322,7 +345,13 @@ async function readPhoto(file) {
     canvas.width = Math.max(1, Math.round(img.naturalWidth * factor));
     canvas.height = Math.max(1, Math.round(img.naturalHeight * factor));
     canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/webp", 0.75);
+    if (evidence) {
+      // Avoid adding compression artifacts to fine scratches. Keep a per-photo
+      // space budget because transaction evidence lives in browser storage.
+      const lossless = canvas.toDataURL("image/png");
+      if (lossless.length < 480_000) return lossless;
+    }
+    return canvas.toDataURL("image/webp", evidence ? 0.94 : 0.75);
   } catch {
     throw new Error("사진을 열 수 없어요. JPG, PNG 또는 WebP 사진을 선택해 주세요.");
   } finally {
@@ -330,10 +359,54 @@ async function readPhoto(file) {
   }
 }
 
+document.addEventListener("change", async ({ target }) => {
+  if (target.form?.dataset.form !== "compare-demo") return;
+  if (target.name === "source") {
+    demo = target.value === "custom" ? { custom: true } : { ...samplePair, custom: false };
+    render();
+    return;
+  }
+  const slot = target.dataset.compareFile;
+  if (!slot || !target.files[0]) return;
+  const current = demo;
+  demo.busy = true;
+  demo.result = null;
+  demo.error = "";
+  const file = target.files[0];
+  render();
+  try {
+    current[slot] = await readPhoto(file, true);
+  } catch (error) {
+    current[slot] = "";
+    current.error = error.message;
+  } finally {
+    current.busy = false;
+    if (route()[0] === "compare" && current === demo) render();
+  }
+});
+
 async function submit(form) {
   const { form: kind, id } = form.dataset;
   const fields = new FormData(form);
   const date = { start: fields.get("start"), end: fields.get("end") };
+
+  if (kind === "compare-demo") {
+    const current = demo;
+    if (current.busy || !current.before || !current.after) return;
+    current.busy = true;
+    current.result = null;
+    current.error = "";
+    render();
+    try {
+      current.result = await comparePhotos(current.before, current.after);
+    } catch (error) {
+      current.error = error.message;
+    } finally {
+      current.busy = false;
+      if (route()[0] === "compare" && current === demo) render();
+    }
+    return;
+  }
 
   if (kind === "filter") {
     if ((date.start || date.end) && (!(rentalDays(date.start, date.end) >= 1) || date.start < localDay())) {
@@ -433,7 +506,7 @@ async function submit(form) {
     const sample = fields.get("sample");
     const role = state.role;
     const status = rental.status;
-    const photo = await readPhoto(fields.get("photo"));
+    const photo = await readPhoto(fields.get("photo"), true);
     if (role !== state.role || status !== rental.status || !dialog.open) return;
     if (!photo && !sample) {
       formError(form, "사진을 첨부하거나 시연용 예시를 선택해 주세요.");
@@ -453,8 +526,9 @@ async function submit(form) {
       updateTrade(rental, "handover", rental.renterId, "인도 사진이 등록됐어요. 물품을 받으면 수령을 확인해 주세요.");
     } else {
       rental.after = photo || (sample === "damage" ? "./assets/proof-after.webp" : rental.before);
-      rental.comparison = photo ? "" : sample;
+      delete rental.comparison;
       updateTrade(rental, "checking", rental.lenderId, "반납 요청과 사진이 도착했어요.");
+      await analyzeTrade(rental);
     }
   } else if (["dispute", "resolve", "review"].includes(kind)) {
     const note = fields.get("note").trim();

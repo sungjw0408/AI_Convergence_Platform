@@ -794,3 +794,13 @@ dialog::backdrop { backdrop-filter: none; }
 .conversation-content .message.outgoing { align-self: flex-end; }
 .message .message-time { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); }
 .conversation-content .compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+
+.diff-result { display: grid; gap: 10px; }
+.diff-result h3 { margin: 0; }
+.diff-canvas { position: relative; overflow: hidden; border-radius: 12px; }
+.diff-canvas img { display: block; width: 100%; height: auto; }
+.diff-box { position: absolute; box-sizing: border-box; border: 2px solid #af3030; outline: 1px solid white; pointer-events: none; }
+.diff-box b, .diff-locations b { color: white; background: #963030; padding: 1px 4px; font: bold 12px/16px sans-serif; border-radius: 2px; }
+.diff-box b { position: absolute; left: -2px; top: -2px; }
+.diff-locations { display: flex; flex-wrap: wrap; gap: 7px 12px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.comparison input[type=file] { width: 100%; margin-top: 5px; font-size: 12px; }
