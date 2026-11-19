@@ -2,14 +2,20 @@
 
 ## 이웃창고 UI 실행
 
-저장소 루트에서 다음 명령을 실행하고 브라우저에서 `http://localhost:8000`을 엽니다.
+대여 전후 사진 비교까지 시연하려면 Python 3.12에서 저장소 루트를 기준으로 아래 명령을 실행합니다.
 
 ```bash
-python3 -m http.server 8000 --directory frontend
+python3.12 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements-compare.txt
+backend/.venv/bin/python backend/compare_server.py --port 8092
 ```
 
+Windows에서는 가상환경을 `py -3.12 -m venv backend/.venv`로 만들고 Python 실행 경로를 `backend/.venv/Scripts/python.exe`로 바꿉니다. 첫 기동 때 PyTorch 공식 서버에서 SqueezeNet 가중치 약 5MB를 받아 캐시합니다. [사진 비교 시연](http://localhost:8092/index.html#compare)에서 빔프로젝터 예시 또는 직접 촬영한 사진 두 장을 선택하세요. [모델 설명과 발표 문구](backend/README.md)
+
+기존 프런트엔드만 보려면 `python3 -m http.server 8000 --directory frontend`로 실행할 수 있습니다. 사진 비교 API는 위의 Python 앱에서 제공합니다.
+
 - `frontend/`에는 홈, 물품 등록·상세, 대여 거래, 채팅, 구독 안내 화면과 샘플 데이터가 있습니다.
-- `backend/`에는 추후 서버가 맡을 범위를 정리했습니다.
+- `backend/`는 전후 사진 비교 API와 시연용 웹 서버를 제공합니다.
 - **마이 → 데모 프로필 전환**에서 대여자, 공급자, 관리자를 전환할 수 있습니다. 신청과 사진 등 시연 데이터는 같은 브라우저에 저장됩니다.
 - 파손 시나리오는 미니 빔프로젝터를 주말에 신청한 뒤 인도 화면에서 손상 신고 예시를 고르면 시연할 수 있습니다.
 
