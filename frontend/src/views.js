@@ -202,17 +202,26 @@ export function tradePage(rental, item, role) {
   </div>`;
 }
 
-export function chatPage(rentals, catalog, role) {
+const partnerName = (rental, role) =>
+  people[role === rental.renterId ? rental.lenderId : rental.renterId]?.name ?? "거래 상대";
+const chatDay = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" });
+const chatClock = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2-digit" });
+const messageDate = (message) => Number.isFinite(message?.sentAt)
+  && Number.isFinite(new Date(message.sentAt).getTime()) ? new Date(message.sentAt) : null;
+
+export function chatPage(rentals, catalog, role, threads, canChat) {
   const conversations = rentals.filter((rental) => (rental.renterId === role || rental.lenderId === role)
-    && ["confirmed", "handover", "active", "checking", "disputed", "complete"].includes(rental.status));
+    && canChat(rental)).map((rental) => ({ rental, last: threads[rental.id]?.at(-1) }))
+    .sort((a, b) => (messageDate(b.last)?.getTime() ?? 0) - (messageDate(a.last)?.getTime() ?? 0));
   return pageHeader("채팅") + `<div class="content chat-list"><p class="page-description">이웃과 나누는 대화, 더 편안한 거래</p>${conversations.length
-    ? conversations.map((rental) => {
+    ? conversations.map(({ rental, last }) => {
       const item = catalog(rental.itemId);
-      const partner = people[rental.renterId === role ? rental.lenderId : rental.renterId];
-      return `<a class="conversation-row" href="#chat/${rental.id}">
+      const time = messageDate(last);
+      return `<a class="conversation-row" href="#chat/${escape(rental.id)}">
         <span class="avatar">${icon("user")}</span>
-        <div class="conversation-summary"><div class="conversation-heading"><strong>${escape(partner.name)}</strong>${badge(rental.status)}</div>
-          <p>${escape(item.title)}</p><small>${dates(rental.start, rental.end)}</small></div>
+        <div class="conversation-summary"><div class="conversation-heading"><strong>${escape(partnerName(rental, role))}</strong>${badge(rental.status)}</div>
+          <p>${escape(item.title)}</p><p>${last ? (last.sender === role ? "나: " : "") + escape(last.text) : "아직 메시지가 없어요."}</p>
+          <small>${dates(rental.start, rental.end)}${time ? ` · <time datetime="${time.toISOString()}">${localDay(time) === localDay() ? chatClock.format(time) : chatDay.format(time)}</time>` : ""}</small></div>
         ${image(item, "chat-thumbnail", item.title)}
       </a>`;
     }).join("")
@@ -220,14 +229,27 @@ export function chatPage(rentals, catalog, role) {
 }
 
 export function conversationPage(rental, item, messages, role) {
+  const partner = escape(partnerName(rental, role));
+  let lastDay = null;
+  const bubbles = messages.map((message) => {
+    const time = messageDate(message);
+    const day = time ? localDay(time) : null;
+    const divider = day && day !== lastDay
+      ? `<div class="chat-day"><time datetime="${day}">${chatDay.format(time)}</time></div>` : "";
+    lastDay = day;
+    const mine = message.sender === role;
+    return divider + `<div class="message${mine ? " outgoing" : ""}">
+      <small>${mine ? "나" : partner}</small>
+      <p>${escape(message.text)}</p>
+      ${time ? `<time class="message-time" datetime="${time.toISOString()}">${chatClock.format(time)}</time>` : ""}
+    </div>`;
+  }).join("");
   return pageHeader(escape(item.title), "#chat") + `<div class="content stack conversation-content">
-    <a class="conversation-item" href="#trade/${rental.id}">${image(item, "trade-thumbnail", item.title)}<div><strong>${escape(item.title)}</strong><p>${won(item.price)} <span>/ 일</span></p></div>${icon("right")}</a>
+    <a class="conversation-item" href="#trade/${escape(rental.id)}">${image(item, "trade-thumbnail", item.title)}<div><strong>${escape(item.title)}</strong><p>${won(item.price)} <span>/ 일</span></p></div>${icon("right")}</a>
     <p class="conversation-notice">${icon("check")}약속한 시간과 장소를 함께 확인해 주세요.</p>
-    <div class="messages" aria-live="polite">${messages.length ? messages.map((message) => `
-      <div class="message${message.sender === role ? " outgoing" : ""}">
-        <small>${people[message.sender].name}</small><p>${escape(message.text)}</p>
-      </div>`).join("") : empty("첫 메시지를 보내보세요", "인도 시간과 만날 장소를 정해보세요.")}</div>
-    <form class="compose" data-form="message" data-id="${rental.id}">
+    <div class="messages chat-history" role="log" aria-label="대화 내역" tabindex="0">${bubbles
+      || empty("첫 메시지를 보내보세요", "인도 시간과 만날 장소를 정해보세요.")}</div>
+    <form class="compose" data-form="message" data-id="${escape(rental.id)}">
       <input name="message" maxlength="350" aria-label="메시지" placeholder="이웃에게 메시지를 보내보세요" required>
       <button type="submit" class="button primary">보내기</button>
     </form>
