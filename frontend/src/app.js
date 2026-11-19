@@ -108,7 +108,7 @@ function render() {
   else if (page === "trade") {
     const rental = rentalById(id);
     if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id));
-  } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role);
+  } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role, state.messages, chatAllowed);
   else if (page === "chat") {
     const rental = rentalById(id);
     if (isParty(rental) && chatAllowed(rental)) content = conversationPage(rental, itemById(rental.itemId), state.messages[id] ?? [], role);
@@ -123,6 +123,8 @@ function render() {
       : `<p class="notice">${page === "saved" ? "아직 관심 물품이 없어요." : "아직 올린 물품이 없어요."}</p>`}</div>`;
   }
   screen.innerHTML = content ?? missingPage();
+  const history = screen.querySelector(".chat-history");
+  if (history) history.scrollTop = history.scrollHeight;
 
   const parent = ({ compare: "profile", item: "home", new: "home", trade: "rentals", saved: "profile", membership: "profile", "my-listings": "profile" })[page] ?? page;
   const tabs = [
@@ -491,8 +493,8 @@ async function submit(form) {
   const borrows = state.role === rental.renterId;
   if (kind === "message" && (owns || borrows) && chatAllowed(rental)) {
     const message = fields.get("message").trim();
-    if (!message) return;
-    (state.messages[id] ??= []).push({ sender: state.role, text: message });
+    if (!message || message.length > 350) return;
+    (state.messages[id] ??= []).push({ sender: state.role, text: message, sentAt: Date.now() });
     save();
     render();
     document.querySelector(".compose input").focus();
