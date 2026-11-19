@@ -1,14 +1,14 @@
 import { comparePhotos } from "./compare.js";
-import { icon } from "./icons.js";
+import { icon } from "./icons.js?v=rento-home-5-ren";
 import {
   catalog, categories, findAvailability, localDay, neighborhoods, people, readState,
   rentalDays, suggestedFields, writeState,
-} from "./model.js";
+} from "./model.js?v=rento-home-5-ren";
 import {
   chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalsPage, tradePage, won,
-} from "./views.js";
+} from "./views.js?v=rento-home-5-ren";
 
 const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
@@ -129,7 +129,7 @@ function render() {
   const parent = ({ compare: "profile", item: "home", new: "home", trade: "rentals", saved: "profile", membership: "profile", "my-listings": "profile" })[page] ?? page;
   const tabs = [
     ["home", "home", "홈"], ["rentals", "calendar", role === "admin" ? "분쟁 검토" : "내 대여"],
-    ["chat", "chat", "채팅"], ["profile", "user", "마이"],
+    ["chat", "chat", "채팅"], ["profile", "user", "내 정보"],
   ];
   navigation.innerHTML = tabs.map(([target, symbol, label]) =>
     `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}>${icon(symbol)}<span>${label}</span></a>`).join("");

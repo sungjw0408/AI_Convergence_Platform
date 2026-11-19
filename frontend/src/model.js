@@ -1,4 +1,4 @@
-export const categories = ["전체", "공구", "디지털", "생활용품"];
+export const categories = ["전체", "공구", "디지털", "생활용품", "캠핑·레저"];
 export const neighborhoods = ["죽전동", "보정동"];
 export const people = {
   renter: { name: "대여자", neighborhood: "죽전동" },
