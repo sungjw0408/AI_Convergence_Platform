@@ -321,3 +321,35 @@ export function modal(title, content) {
 export function missingPage() {
   return pageHeader("화면을 열 수 없어요", "#home") + `<div class="content">${empty("찾을 수 없는 화면이에요", "홈에서 다시 시작해 주세요.")}</div>`;
 }
+
+
+export function aiRoomPage(session, itemById) {
+  const suggestions = ["주말에 집에서 영화 보고 싶어요", "가구 조립에 쓸 공구가 필요해요", "하루 5천 원 이하로 추천해 주세요"];
+  const bubbles = session.messages.map(message => {
+    const mine = message.role === "user";
+    const items = (message.itemIds ?? []).map(itemById).filter(Boolean);
+    return `<article class="ai-room-message${mine ? " mine" : ""}">
+      <span class="ai-room-speaker">${mine ? "나" : "렌토 AI"}</span>
+      <div class="ai-room-bubble">${escape(message.text)}</div>
+      ${items.length ? `<div class="ai-room-items">${items.map(item => `<a class="ai-room-item" href="#item/${escape(item.id)}">
+        ${image(item, "trade-thumbnail", item.title)}<div><strong>${escape(item.title)}</strong><p>${won(item.price)} / 일 · ${escape(item.neighborhood)}</p><small>상세에서 대여 날짜와 조건 확인</small></div>${icon("right")}</a>`).join("")}</div>` : ""}
+    </article>`;
+  }).join("");
+  return pageHeader("AI에게 물어보기", "#home") + `<div class="content stack ai-room">
+    <div class="ai-room-intro"><span class="ai-room-avatar">${icon("sparkle")}</span><div><strong>렌토 AI</strong><p>필요한 물건을 함께 찾아봐요.</p></div>
+      <button type="button" class="button secondary" data-action="ai-new"${session.busy ? " disabled" : ""}>새 대화</button></div>
+    <p class="hint ai-room-note">이곳에 입력한 질문과 물품 목록을 로컬 AI가 참고해요. 이웃과 나눈 채팅은 전달하지 않아요. 답변은 참고용이며 예약은 직접 신청해 주세요.</p>
+    <div class="ai-room-history" role="log" aria-label="AI와의 대화" tabindex="0">
+      ${bubbles || `<article class="ai-room-message"><span class="ai-room-speaker">렌토 AI</span><div class="ai-room-bubble">안녕하세요! 어떤 일에 쓸 물건을 찾고 계세요? 용도나 예산을 알려주시면 등록된 물품에서 찾아드릴게요.</div></article>`}
+      ${session.busy ? `<article class="ai-room-message mine"><span class="ai-room-speaker">나</span><div class="ai-room-bubble">${escape(session.pending)}</div></article><p class="ai-room-pending" role="status">렌토 AI가 답변을 준비하고 있어요…</p>` : ""}
+    </div>
+    ${!session.messages.length && !session.busy ? `<div class="ai-room-examples">${suggestions.map(text => `<button type="button" data-action="ai-example" data-text="${escape(text)}">${escape(text)}</button>`).join("")}</div>` : ""}
+    ${session.error ? `<div class="ai-room-error" role="alert"><p>${escape(session.error)}</p><button type="button" class="button secondary" data-action="ai-retry">다시 보내기</button></div>` : ""}
+    <form class="ai-room-compose" data-form="ai-room">
+      <label class="sr-only" for="ai-question">AI에게 보낼 질문</label>
+      <textarea id="ai-question" name="question" rows="2" maxlength="500" placeholder="용도나 궁금한 점을 물어보세요" required${session.busy ? " disabled" : ""}>${escape(session.draft)}</textarea>
+      <button type="submit" class="button primary"${session.busy ? " disabled" : ""}>${session.busy ? "답변 중" : "보내기"}</button>
+    </form>
+    <p class="hint">Enter로 전송 · Shift+Enter로 줄바꿈 · 대화는 현재 탭에서만 유지돼요.</p>
+  </div>`;
+}
