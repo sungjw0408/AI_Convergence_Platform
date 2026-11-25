@@ -1,6 +1,7 @@
 """Run: python backend/chat_server.py --port 8001 (standard library only)."""
 import argparse
 import json
+import socket
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -53,9 +54,20 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--lan", action="store_true", help="같은 네트워크의 팀원에게 시연 서버 공유")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1] / "frontend"
     handler = partial(Handler, directory=str(root))
-    with ThreadingHTTPServer(("127.0.0.1", args.port), handler) as server:
+    host = "0.0.0.0" if args.lan else "127.0.0.1"
+    with ThreadingHTTPServer((host, args.port), handler) as server:
         print(f"이웃창고 + 채팅 AI: http://127.0.0.1:{args.port}", flush=True)
+        if args.lan:
+            try:
+                addresses = socket.gethostbyname_ex(socket.gethostname())[2]
+            except OSError:
+                addresses = []
+            for address in sorted(set(addresses)):
+                if not address.startswith("127."):
+                    print(f"팀원 접속 주소 후보: http://{address}:{args.port}/#assistant", flush=True)
+            print("Wi-Fi 또는 이더넷의 IPv4 주소를 사용하세요 (ipconfig로 확인).", flush=True)
         server.serve_forever()
