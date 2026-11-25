@@ -85,3 +85,31 @@ test("IndexedDB round trip preserves PNG bytes and provides a display URL", asyn
   assert.match(photoUrl(ref), /^blob:/);
   await assert.rejects(photoBlob("capture:missing"), /원본을 찾을 수/);
 });
+
+test("guided sequence keeps one camera stream and advances without accepting each frame", async () => {
+  const saved = [];
+  let completed = 0, opened = 0;
+  navigator.mediaDevices.getUserMedia = async () => { opened++; return media(); };
+  const dialog = openCapture({ sequence: [{ id: "front", label: "앞면" }, { id: "back", label: "뒷면" }],
+    onCapture(photo, view) { saved.push({ photo, view }); }, onComplete() { completed++; } });
+  dialog.querySelector('[data-camera="start"]').click(); await tick();
+  dialog.querySelector('[data-camera="shoot"]').click(); await tick();
+  assert.match(dialog.querySelector(".camera-face").textContent, /2 \/ 2 · 뒷면/);
+  assert.equal(dialog.querySelector('[data-camera="use"]').hidden, true);
+  assert.equal(stopped, 0);
+  dialog.querySelector('[data-camera="shoot"]').click(); await tick();
+  assert.equal(opened, 1); assert.equal(stopped, 1); assert.equal(completed, 1);
+  assert.deepEqual(saved.map(({ view }) => view.id), ["front", "back"]);
+  assert.deepEqual(saved.map(({ photo }) => photo.face), ["앞면", "뒷면"]);
+  assert.equal(document.querySelector("dialog"), null);
+});
+
+test("cancelling a sequence keeps accepted photos and stops without completing", async () => {
+  let count = 0;
+  const dialog = openCapture({ sequence: [{ id: "front", label: "앞면" }, { id: "back", label: "뒷면" }],
+    onCapture() { count++; }, onComplete() { assert.fail("incomplete sequence"); } });
+  dialog.querySelector('[data-camera="start"]').click(); await tick();
+  dialog.querySelector('[data-camera="shoot"]').click(); await tick();
+  dialog.close();
+  assert.equal(count, 1); assert.equal(stopped, 1);
+});
