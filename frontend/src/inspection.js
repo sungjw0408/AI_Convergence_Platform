@@ -41,7 +41,7 @@ export function inspectionRecord(rental, item) {
     after: rental.after ? { legacy: { ...rental.afterEvidence, source: rental.after } } : {},
     results: rental.photoAnalysis ? { legacy: { ...rental.photoAnalysis, beforeSource: rental.before, afterSource: rental.after } } : {},
   };
-  return { plan: inspectionPlan(item), before: {}, after: {}, results: {} };
+  return { plan: item.inspectionPlan || inspectionPlan(item), before: {}, after: {}, results: {} };
 }
 
 export function currentResult(record, id) {

@@ -1,13 +1,25 @@
 import { photoUrl } from "./photo-store.js";
 
 export const faces = ["정면", "후면", "왼쪽 면", "오른쪽 면", "윗면", "아랫면"];
+const capturedFrames = new WeakMap();
+
+// An in-memory guard binds this exact, immutable frame Blob to its capture flow.
+// It does not authenticate a physical camera or replace server-side verification.
+export function isDirectCapture(photo, context = null) {
+  const frame = photo?.blob && capturedFrames.get(photo.blob);
+  return Boolean(frame && frame.context === context && frame.capturedAt === photo.capturedAt
+    && frame.width === photo.width && frame.height === photo.height);
+}
 
 // The guide is a separate DOM layer. Only the unmirrored video frame is saved.
-export function openCapture({ reference, face = "정면", instruction, returning = Boolean(reference), onCapture }) {
+export function openCapture({ reference, face = "정면", instruction, returning = Boolean(reference), title, context = null, sequence, onComplete, onCapture }) {
+  const shots = sequence?.length ? sequence.map((view) => ({ ...view })) : null;
+  let shotIndex = 0;
+  if (shots) { face = shots[0].label; instruction = shots[0].instruction; }
   const dialog = document.createElement("dialog");
   dialog.className = "camera-dialog";
   dialog.setAttribute("aria-label", `${face} 직접 촬영`);
-  dialog.innerHTML = `<header class="dialog-header"><h2>${returning ? "반납 사진 촬영" : "대여 전 사진 촬영"}</h2>
+  dialog.innerHTML = `<header class="dialog-header"><h2></h2>
     <button class="icon-button" data-camera="close" aria-label="촬영 닫기">×</button></header>
     <p class="camera-face"></p><p class="camera-instruction hint"></p>
     <div class="camera-stage"><video playsinline muted autoplay></video>
@@ -23,11 +35,18 @@ export function openCapture({ reference, face = "정면", instruction, returning
       <button class="button secondary" data-camera="retake" hidden>다시 촬영</button>
       <button class="button primary" data-camera="use" hidden>이 사진 등록</button></div>`;
   document.body.append(dialog);
+  dialog.querySelector("h2").textContent = title || (returning ? "반납 사진 촬영" : "대여 전 사진 촬영");
   const video = dialog.querySelector("video"), overlay = dialog.querySelector(".camera-reference");
   const still = dialog.querySelector(".camera-still"), status = dialog.querySelector(".camera-status");
   const placeholder = dialog.querySelector(".camera-placeholder");
   const button = (action) => dialog.querySelector(`[data-camera="${action}"]`);
-  dialog.querySelector(".camera-face").textContent = `촬영 면 · ${face}`;
+  const updateFace = () => {
+    if (shots) { face = shots[shotIndex].label; instruction = shots[shotIndex].instruction; }
+    dialog.setAttribute("aria-label", `${face} 직접 촬영`);
+    dialog.querySelector(".camera-face").textContent = shots ? `${shotIndex + 1} / ${shots.length} · ${face}` : `촬영 면 · ${face}`;
+    dialog.querySelector(".camera-instruction").textContent = instruction || "물품이 가려지지 않도록 선명하게 촬영해 주세요.";
+  };
+  updateFace();
   dialog.querySelector(".camera-instruction").textContent = instruction || "물품이 가려지지 않도록 선명하게 촬영해 주세요.";
   let stream, capture, pending = false, closed = false, stillUrl;
   if (reference) { overlay.src = photoUrl(reference); overlay.style.opacity = ".35"; }
@@ -81,6 +100,18 @@ export function openCapture({ reference, face = "정면", instruction, returning
         if (!blob) throw new Error("촬영에 실패했어요. 다시 시도해 주세요.");
         if (closed) return;
         capture = { blob, capturedAt: new Date().toISOString(), width: canvas.width, height: canvas.height, face, source: "camera" };
+        capturedFrames.set(blob, { context, capturedAt: capture.capturedAt, width: capture.width, height: capture.height });
+        if (shots) {
+          // Keep one stream open; each fresh frame advances to the next part.
+          const accepted = onCapture(capture, shots[shotIndex]);
+          if (accepted === false) { dialog.close(); return; }
+          shotIndex++;
+          if (shotIndex === shots.length) { dialog.close(); onComplete?.(); return; }
+          capture = undefined;
+          updateFace();
+          status.textContent = "저장했어요. 물품을 돌려 다음 부위를 촬영해 주세요.";
+          return;
+        }
         URL.revokeObjectURL(stillUrl); stillUrl = URL.createObjectURL(blob); still.src = stillUrl;
         stop(); video.hidden = true; overlay.hidden = true; still.hidden = false;
         button("shoot").hidden = true; button("retake").hidden = false; button("use").hidden = false;

@@ -1,6 +1,9 @@
 import { comparisonResult } from "./compare.js";
 import { inspectionCard } from "./inspection-view.js";
 import { photoUrl } from "./photo-store.js";
+import { itemGallery } from "./listing-photo-view.js";
+import { registrationForm } from "./listing-registration-view.js";
+import { newListingDraft } from "./listing-photos.js";
 import { faces } from "./capture.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import { categories, localDay, people, rentalDays, statuses } from "./model.js?v=rento-home-5-ren";
@@ -91,9 +94,9 @@ export function rentalEstimate(item, start, end) {
   return `대여료 ${won(fee)} (${days}일) + 보증금 ${won(item.deposit ?? 0)} = ${won(fee + (item.deposit ?? 0))}`;
 }
 
-export function itemPage(item, role, date) {
+export function itemPage(item, role, date, selectedPhoto) {
   return pageHeader("물품 상세", "#home") + `<div class="content">
-    ${image(item, "detail-photo", item.title)}
+    ${itemGallery(item, selectedPhoto, escape)}
     <section class="detail-info">
       <p class="muted">${escape(item.category)} · ${escape(item.neighborhood)}</p>
       <h2>${escape(item.title)}</h2>
@@ -123,25 +126,13 @@ export function dateInputs(date = {}, { required = true } = {}) {
   </div>`;
 }
 
-export function registerPage(role, area) {
-  return pageHeader("물품 등록", "#home") + `<div class="content">${role === "admin" ?
-    '<p class="notice">대여자 또는 공급자 프로필에서 물품을 등록할 수 있어요.</p>' :
-    `<form class="form-card plain" data-form="register">
-      <label>물품 사진 <span class="hint">선택</span><input type="file" name="photo" accept="image/*"></label>
-      <label>물품명<input name="title" maxlength="48" placeholder="예시 · 미니 빔프로젝터" required></label>
-      <button type="button" class="button secondary" data-action="draft">${icon("sparkle")}분류·초안·대여료 제안</button>
-      <p class="hint">AI 등록 지원은 예시 결과를 보여줘요.</p>
-      <div class="field-pair">
-        <label>카테고리<select name="category" required><option value="">선택</option>${categories.slice(1).map((name) => `<option>${name}</option>`).join("")}</select></label>
-        <label>하루 대여료 (원)<input type="number" name="price" inputmode="numeric" min="0" max="10000000" step="1" required></label>
-      </div>
-      <label>거래 지역<select name="neighborhood"><option>${area}</option><option>${area === "죽전동" ? "보정동" : "죽전동"}</option></select></label>
-      <label>보증금 (원)<input type="number" name="deposit" inputmode="numeric" min="0" max="10000000" step="1" placeholder="없으면 0원"></label>
-      <fieldset><legend>대여 가능 기간 <span class="hint">선택</span></legend>${dateInputs({}, { required: false })}</fieldset>
-      <label>물품 설명<textarea name="description" rows="4" maxlength="600" placeholder="물품 상태나 함께 제공하는 구성품을 적어주세요." required></textarea></label>
-      <p class="form-error" role="alert" hidden></p>
-      ${button("물품 게시하기")}
-    </form>`}</div>`;
+export function registerPage(role, area, draft = newListingDraft(area)) {
+  const header = draft.step > 0 && role !== "admin"
+    ? `<header class="page-header"><button class="icon-button" data-action="listing-prev" aria-label="이전 단계">${icon("back")}</button><h1>물품 등록</h1></header>`
+    : pageHeader("물품 등록", "#home");
+  return header + `<div class="content registration-content">${role === "admin"
+    ? '<p class="notice">대여자 또는 공급자 프로필에서 물품을 등록할 수 있어요.</p>'
+    : registrationForm(draft, escape)}</div>`;
 }
 
 function rentalRow(rental, item, destination = "trade") {

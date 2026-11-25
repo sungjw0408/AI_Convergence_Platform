@@ -7,6 +7,9 @@ import { preparePhotos, photoUrl, saveOriginal } from "./photo-store.js";
 import { evaluationPage } from "./evaluation.js";
 import { completeDraft, currentResult, inspectionRecord, inspectionSources } from "./inspection.js";
 import { inspectionPhotoDialog } from "./inspection-view.js";
+import { addListingPhotos, assignListingView, hasOnlyListingCameraPhotos, listingCaptureContext, listingSources, maxListingPhotos, missingListingViews, newListingDraft, removeListingPhoto, replaceListingPhoto, syncListingPlan } from "./listing-photos.js";
+import { validateListingStep } from "./listing-registration.js";
+import { itemGallery, listingPhotoPanel } from "./listing-photo-view.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import {
   catalog, categories, findAvailability, initialState, localDay, neighborhoods, people, readState,
@@ -63,9 +66,16 @@ let demo = { ...samplePair, custom: false };
 const comparisonFeedback = new Map();
 const evidenceDrafts = new Map();
 const inspectionViews = new Map();
+const listingDrafts = new Map();
+const gallerySelections = new Map();
+const listingSavedSources = new WeakMap();
+function listingDraft(role = state.role) {
+  if (!listingDrafts.has(role)) listingDrafts.set(role, newListingDraft(state.area));
+  return listingDrafts.get(role);
+}
 const evaluation = { busy: false };
 let photoStorageError = "";
-try { await preparePhotos(state.rentals.flatMap(inspectionSources)); }
+try { await preparePhotos([...state.rentals.flatMap(inspectionSources), ...state.listings.flatMap(listingSources)]); }
 catch (error) { photoStorageError = error.message; }
 
 async function analyzeTrade(rental, force = false) {
@@ -182,8 +192,8 @@ function render() {
     unread: state.notices.some((notice) => notice.role === role && !notice.read),
   });
   else if (page === "assistant") content = aiRoomPage(assistantSession(), itemById);
-  else if (page === "item" && itemById(id)) content = itemPage(itemById(id), role, filters.date);
-  else if (page === "new") content = registerPage(role, state.area);
+  else if (page === "item" && itemById(id)) content = itemPage(itemById(id), role, filters.date, gallerySelections.get(id));
+  else if (page === "new") content = registerPage(role, state.area, listingDraft());
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
   else if (page === "trade") {
     const rental = rentalById(id);
@@ -321,6 +331,77 @@ function evidenceForm(kind, rental) {
     ${formErrorMarkup}<button class="button primary" type="submit">${kind === "handoff" ? "사진 등록 · 물품 전달" : kind === "return-update" ? "사진 업데이트" : "사진 등록 · 반납 요청"}</button>
   </form>`;
 }
+
+function rememberListingFields(form) {
+  const draft = listingDraft();
+  for (const name of Object.keys(draft.fields)) if (form.elements[name]) draft.fields[name] = form.elements[name].value;
+  return draft;
+}
+
+function refreshListingPhotos(form, draft = listingDraft()) {
+  if (!form?.isConnected || form.dataset.form !== "register") return;
+  const panel = form.querySelector("#listing-photo-panel");
+  if (panel) panel.outerHTML = listingPhotoPanel(draft, escape);
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) {
+    submit.disabled = draft.busy;
+    if (draft.step === 2) submit.textContent = draft.busy ? "게시하고 있어요…" : "물품 게시하기";
+  }
+  form.querySelectorAll('[data-action="listing-prev"]').forEach((button) => { button.disabled = draft.busy; });
+}
+
+function showListingStep(step, error) {
+  const draft = listingDraft();
+  draft.step = step;
+  render();
+  window.scrollTo(0, 0);
+  const form = screen.querySelector('[data-form="register"]');
+  if (error) {
+    formError(form, error.message);
+    (form.elements[error.field] || form.querySelector(".form-error")).focus();
+  } else screen.querySelector("#registration-stage-title")?.focus({ preventScroll: true });
+}
+
+function updateListingPlan(form) {
+  const draft = rememberListingFields(form);
+  if (draft.busy) return;
+  if (syncListingPlan(draft)) {
+    if (draft.photos.length) draft.error = "촬영 목록이 바뀌었어요. 추가한 사진의 부위를 다시 선택해 주세요.";
+    refreshListingPhotos(form, draft);
+  }
+}
+
+function openListingCamera(form, photoId) {
+  if (!form || state.role === "admin" || listingDraft().step !== 1) return;
+  updateListingPlan(form);
+  const draft = listingDraft(), role = state.role;
+  const previous = draft.photos.find((photo) => photo.id === photoId);
+  if (draft.busy || (!previous && draft.photos.length >= maxListingPhotos)) return;
+  const sequence = previous ? draft.plan.views.filter((view) => view.id === previous.viewId) : missingListingViews(draft);
+  if (!sequence.length) return;
+  if (!previous && draft.photos.length + sequence.length > maxListingPhotos) {
+    draft.error = "기존 사진의 촬영 부위를 지정하거나 불필요한 사진을 삭제한 뒤 이어서 촬영해 주세요.";
+    refreshListingPhotos(form, draft);
+    return;
+  }
+  const available = () => role === state.role && form.isConnected && draft.step === 1;
+  openCapture({ title: previous ? "사진 다시 촬영" : "물품 사진 촬영", context: listingCaptureContext(draft), sequence, onCapture(capture, view) {
+    if (!available()) return false;
+    const photo = { blob: capture.blob, preview: URL.createObjectURL(capture.blob), width: capture.width,
+      height: capture.height, capturedAt: capture.capturedAt, addedAt: capture.capturedAt, origin: "camera" };
+    try {
+      if (previous) replaceListingPhoto(draft, previous.id, photo);
+      else { draft.activeViewId = view.id; addListingPhotos(draft, [photo]); }
+      draft.error = "";
+    } catch (error) { URL.revokeObjectURL(photo.preview); throw error; }
+    refreshListingPhotos(form, draft);
+  }, onComplete() {
+    if (!available()) return;
+    if (missingListingViews(draft).length === 0) draft.photoMode = "review";
+    showListingStep(1);
+  } });
+}
+
 
 function discardDemoPhotos() {
   for (const source of [demo.before, demo.after]) if (source?.startsWith("blob:")) URL.revokeObjectURL(source);
@@ -479,6 +560,44 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const { action, id } = target.dataset;
+  if (action.startsWith("listing-")) {
+    if (["listing-gallery", "listing-photo-enlarge"].includes(action)) {
+      const item = itemById(route()[1]);
+      if (!item) return;
+      const photos = item.photos?.length ? item.photos : [{ id: "legacy", source: item.image, label: item.title }];
+      const photo = photos.find((p) => p.id === id);
+      if (!photo) return;
+      if (action === "listing-gallery") {
+        gallerySelections.set(item.id, id);
+        screen.querySelector("#item-gallery").outerHTML = itemGallery(item, id, escape);
+      } else showDialog(photo.label || item.title, `<img class="listing-enlarged" src="${escape(photoUrl(photo.source))}" alt="${escape(photo.label || item.title)}">`);
+      return;
+    }
+    const form = target.form || screen.querySelector('[data-form="register"]');
+    if (form?.dataset.form !== "register" || state.role === "admin") return;
+    const draft = rememberListingFields(form);
+    if (draft.busy) return;
+    if (action === "listing-prev") { showListingStep(Math.max(0, draft.step - 1)); return; }
+    if (action === "listing-review-photos") {
+      if (dialog.open) dialog.close();
+      draft.photoMode = draft.photos.length ? "review" : "capture";
+      showListingStep(1);
+      return;
+    }
+    if (action === "listing-preview") {
+      const photo = draft.photos.find((entry) => entry.id === id);
+      if (photo) showDialog("사진 확인", `<img class="listing-enlarged" src="${escape(photo.preview || photoUrl(photo.source))}" alt="촬영한 물품 사진">`);
+      return;
+    }
+    if (action === "listing-camera") { openListingCamera(form); return; }
+    if (action === "listing-photo-retake") { openListingCamera(form, id); return; }
+    if (action === "listing-target" && draft.plan.views.some((v) => v.id === id)) draft.activeViewId = id;
+    else if (action === "listing-photo-remove") removeListingPhoto(draft, id);
+    else if (action === "listing-cover" && draft.photos.some((p) => p.id === id)) draft.coverId = id;
+    draft.error = "";
+    refreshListingPhotos(form, draft);
+    return;
+  }
   if (action === "inspection-view") {
     const rental = rentalById(route()[1]);
     if (rental && (isParty(rental) || state.role === "admin")) { inspectionViews.set(rental.id, id); render(); }
@@ -569,23 +688,27 @@ document.addEventListener("click", async (event) => {
   } else if (action === "trade-action") await tradeAction(id);
   else if (action === "draft") {
     const form = target.form;
-    const title = form.elements.title.value.trim();
+    const draft = rememberListingFields(form);
+    const title = draft.fields.title.trim();
     if (!title) {
       formError(form, "물품명을 먼저 입력해 주세요.");
       return;
     }
     formError(form, "");
     const suggestion = suggestedFields(title);
-    form.elements.category.value = suggestion.category;
-    form.elements.price.value = suggestion.price;
-    if (!form.elements.description.value.trim()) {
-      form.elements.description.value = `${title}을(를) 빌려드려요. 물품 상태와 구성품을 적어주세요.`;
+    draft.fields.category = suggestion.category;
+    if (!draft.fields.price) draft.fields.price = String(suggestion.price);
+    if (!draft.fields.description.trim()) {
+      draft.fields.description = `${title}을(를) 빌려드려요. 물품 상태와 구성품을 적어주세요.`;
     }
+    syncListingPlan(draft);
+    showListingStep(draft.step);
     showToast("예시 제안을 채웠어요. 게시 전에 확인해 주세요.");
   }
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.form?.dataset.form === "register") rememberListingFields(event.target.form);
   if (event.target.name === "condition-note" && ["handoff", "return", "return-update"].includes(event.target.form?.dataset.form)) {
     const rental = rentalById(event.target.form.dataset.id);
     if (rental) evidenceDraft(event.target.form.dataset.form, rental).note = event.target.value;
@@ -608,7 +731,7 @@ document.addEventListener("input", (event) => {
   }
 });
 
-async function readPhoto(file, evidence = false) {
+async function readPhoto(file, evidence = false, maxLength = Infinity) {
   if (!file?.size) return "";
   if (!file.type.startsWith("image/") || file.size > 12 * 1024 * 1024) {
     throw new Error("12MB 이하 이미지 파일을 선택해 주세요.");
@@ -629,7 +752,15 @@ async function readPhoto(file, evidence = false) {
       const lossless = canvas.toDataURL("image/png");
       if (lossless.length < 480_000) return lossless;
     }
-    return canvas.toDataURL("image/webp", evidence ? 0.94 : 0.75);
+    const quality = evidence ? 0.94 : 0.75;
+    let encoded = canvas.toDataURL("image/webp", quality);
+    while (encoded.length > maxLength) {
+      canvas.width = Math.max(1, Math.floor(canvas.width * 0.75));
+      canvas.height = Math.max(1, Math.floor(canvas.height * 0.75));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      encoded = canvas.toDataURL("image/webp", quality);
+    }
+    return encoded;
   } catch {
     throw new Error("사진을 열 수 없어요. JPG, PNG 또는 WebP 사진을 선택해 주세요.");
   } finally {
@@ -638,6 +769,15 @@ async function readPhoto(file, evidence = false) {
 }
 
 document.addEventListener("change", async ({ target }) => {
+  if (target.form?.dataset.form === "register") {
+    const form = target.form, draft = rememberListingFields(form);
+    if (target.dataset.listingView) {
+      if (!draft.busy) { assignListingView(draft, target.dataset.listingView, target.value); draft.error = ""; refreshListingPhotos(form, draft); }
+      return;
+    }
+    if (["title", "category"].includes(target.name)) updateListingPlan(form);
+    return;
+  }
   if (["handoff", "return", "return-update"].includes(target.form?.dataset.form)) {
     const rental = rentalById(target.form.dataset.id);
     if (rental && target.name === "check") evidenceDraft(target.form.dataset.form, rental).checks = new FormData(target.form).getAll("check");
@@ -747,32 +887,84 @@ async function submit(form) {
   }
 
   if (kind === "register" && state.role !== "admin") {
-    const title = fields.get("title").trim();
-    const description = fields.get("description").trim();
-    const price = Number(fields.get("price"));
-    const deposit = Number(fields.get("deposit"));
-    if (!Number.isSafeInteger(deposit) || deposit < 0 || deposit > 10000000) {
-      formError(form, "보증금은 0원부터 1,000만 원까지 1원 단위로 입력해 주세요.");
+    updateListingPlan(form);
+    const draft = listingDraft(), role = state.role;
+    if (draft.busy) return;
+    if (draft.step < 2) {
+      // Photo completion is required for publishing, not for viewing the terms.
+      const error = draft.step === 0 ? validateListingStep(draft, 0) : null;
+      if (error) {
+        formError(form, error.message);
+        (form.elements[error.field] || form.querySelector(".form-error")).focus();
+        return;
+      }
+      showListingStep(draft.step + 1);
       return;
     }
-    const category = fields.get("category");
-    const area = fields.get("neighborhood");
-    if (!title || !description || !categories.slice(1).includes(category) || !neighborhoods.includes(area)
-      || !Number.isSafeInteger(price) || price < 0 || price > 10000000) {
-      formError(form, "물품명, 설명, 카테고리와 대여료를 확인해 주세요.");
-      return;
+    // Recheck previous steps too: the item type or date may have changed.
+    for (let step = 0; step < 3; step++) {
+      const issue = validateListingStep(draft, step);
+      if (issue) {
+        if (step === 1) {
+          formError(form, issue.message);
+          showDialog("사진 촬영을 완료해 주세요", `<p class="registration-photo-prompt">${escape(issue.message)}</p>
+            <div class="registration-photo-prompt-actions"><button type="button" class="button secondary" data-action="close">계속 입력하기</button>
+            <button type="button" class="button primary" data-action="listing-review-photos">사진 촬영하기</button></div>`);
+        } else showListingStep(step, issue);
+        return;
+      }
     }
-    if ((date.start || date.end) && (!(rentalDays(date.start, date.end) >= 1) || date.start < localDay())) {
-      formError(form, "대여 가능 기간의 시작일과 종료일을 확인해 주세요.");
-      return;
+    const title = draft.fields.title.trim(), description = draft.fields.description.trim();
+    const price = Number(draft.fields.price), deposit = Number(draft.fields.deposit);
+    const category = draft.fields.category, area = draft.fields.neighborhood;
+    const date = { start: draft.fields.start, end: draft.fields.end };
+    const fieldSnapshot = JSON.stringify(draft.fields);
+    draft.busy = true;
+    refreshListingPhotos(form, draft);
+    try {
+      const photos = [];
+      for (const photo of draft.photos) {
+        let source = listingSavedSources.get(photo.blob);
+        if (!source) {
+          const original = await saveOriginal({ blob: photo.blob, capturedAt: photo.capturedAt, width: photo.width,
+            height: photo.height, origin: "camera", addedAt: photo.addedAt,
+            face: draft.plan.views.find((v) => v.id === photo.viewId)?.label || "추가 사진" });
+          // Keep the camera original locally and use a bounded copy for other browsers.
+          source = databaseMode ? await readPhoto(photo.blob, false, 95_000) : original;
+          listingSavedSources.set(photo.blob, source);
+        }
+        photos.push({ id: photo.id, source, viewId: photo.viewId,
+          label: draft.plan.views.find((v) => v.id === photo.viewId)?.label || "추가 사진", origin: "camera",
+          capturedAt: photo.capturedAt || null, addedAt: photo.addedAt, width: photo.width, height: photo.height });
+      }
+      if (role !== state.role || !form.isConnected) return;
+      if (JSON.stringify(rememberListingFields(form).fields) !== fieldSnapshot) {
+        draft.busy = false;
+        updateListingPlan(form);
+        formError(form, "입력 내용이 변경됐어요. 촬영 부위와 내용을 확인한 뒤 다시 게시해 주세요.");
+        return;
+      }
+      if (!hasOnlyListingCameraPhotos(draft)) {
+        formError(form, "촬영 원본을 확인할 수 없어요. 앱 카메라로 다시 촬영해 주세요.");
+        return;
+      }
+      const cover = photos.find((photo) => photo.id === draft.coverId) || photos[0];
+      const listing = { id: newId(), createdAt: Date.now(), title, description, price, deposit, owner: role, category,
+        neighborhood: area, image: cover.source, photos, coverPhotoId: cover.id, inspectionPlan: structuredClone(draft.plan),
+        availableFrom: date.start, availableTo: date.end };
+      state.listings.unshift(listing);
+      const saved = databaseMode ? await saveToDatabase() : writeState(state);
+      if (!saved) {
+        state.listings = state.listings.filter((item) => item !== listing);
+        if (form.isConnected) formError(form, "저장하지 못했어요. 사진과 입력 내용은 유지돼요.");
+        return;
+      }
+      draft.photos.forEach((photo) => { if (photo.preview) URL.revokeObjectURL(photo.preview); });
+      listingDrafts.delete(role);
+    } finally {
+      draft.busy = false;
+      refreshListingPhotos(form, draft);
     }
-    const role = state.role;
-    const photo = await readPhoto(fields.get("photo"));
-    if (role !== state.role || !form.isConnected) return;
-    state.listings.unshift({ id: newId(), createdAt: Date.now(), title, description, price, deposit, owner: role, category,
-      neighborhood: area, image: photo, availableFrom: date.start, availableTo: date.end });
-    const saving = save();
-    if (saving && !await saving) return;
     filters.query = "";
     filters.category = "전체";
     filters.date = {};

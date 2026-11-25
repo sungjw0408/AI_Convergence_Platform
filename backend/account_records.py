@@ -75,13 +75,16 @@ def account_documents(root, uid, transaction):
 def validate_listing(record, uid, current):
     require(not current and record.get("owner") == uid)
     require(set(record) <= {"id", "title", "description", "category", "neighborhood", "price", "deposit",
-                            "image", "availableFrom", "availableTo", "owner", "createdAt"})
+                            "image", "availableFrom", "availableTo", "owner", "createdAt",
+                            "photos", "coverPhotoId", "inspectionPlan"})
     require(text(record.get("title"), 48, True) and text(record.get("description"), 600, True))
     require(record.get("category") in CATEGORIES and record.get("neighborhood") in AREAS)
     require(integer(record.get("price"), 10_000_000) and integer(record.get("deposit"), 10_000_000))
     require(integer(record.get("createdAt"), 2**53 - 1))
     image = record.get("image")
     require(image == "" or matches(IMAGE, image))
+    if {"photos", "coverPhotoId", "inspectionPlan"} & record.keys():
+        validate_listing_photos(record)
     if record.get("availableFrom") or record.get("availableTo"):
         require(day(record.get("availableFrom")) <= day(record.get("availableTo")))
 
@@ -106,10 +109,7 @@ def check_availability(root, transaction, record, item, *, confirming):
     return (end - start).days + 1
 
 
-def validate_inspection(record, field):
-    inspection = record.get("inspection")
-    require(isinstance(inspection, dict))
-    plan = inspection.get("plan")
+def validate_plan(plan):
     require(isinstance(plan, dict) and isinstance(plan.get("views"), list) and 1 <= len(plan["views"]) <= 4)
     require(isinstance(plan.get("checks"), list) and len(plan["checks"]) <= 8)
     require(all(isinstance(view, dict) and matches(IDS, view.get("id"))
@@ -117,6 +117,37 @@ def validate_inspection(record, field):
                 and type(view.get("compare")) is bool for view in plan["views"]))
     require(all(isinstance(check, dict) and matches(IDS, check.get("id")) and text(check.get("label"), 200, True)
                 for check in plan["checks"]))
+
+
+def validate_listing_photos(record):
+    plan = record.get("inspectionPlan")
+    validate_plan(plan)
+    photos = record.get("photos")
+    require(isinstance(photos, list) and 1 <= len(photos) <= 8)
+    required_views = {view["id"] for view in plan["views"]}
+    photos_by_id = {}
+    assigned_views = []
+    for photo in photos:
+        require(isinstance(photo, dict) and matches(IDS, photo.get("id")))
+        require(photo.get("origin") == "camera" and text(photo.get("label"), 100, True))
+        source = photo.get("source")
+        require(matches(IMAGE, source) and len(source) <= 95_000)
+        view = photo.get("viewId")
+        require(isinstance(view, str) and (not view or view in required_views))
+        if view:
+            assigned_views.append(view)
+        photos_by_id[photo["id"]] = source
+    require(len(photos_by_id) == len(photos) and len(assigned_views) == len(required_views)
+            and set(assigned_views) == required_views)
+    cover_id = record.get("coverPhotoId")
+    require(matches(IDS, cover_id) and photos_by_id.get(cover_id) == record["image"])
+
+
+def validate_inspection(record, field):
+    inspection = record.get("inspection")
+    require(isinstance(inspection, dict))
+    plan = inspection.get("plan")
+    validate_plan(plan)
     for phase in ("before", "after"):
         photos = inspection.get(phase)
         require(isinstance(photos, dict) and len(photos) <= 4)

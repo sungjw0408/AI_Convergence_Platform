@@ -38,7 +38,7 @@
 
 | 컬렉션 | 문서 1건 | 주요 필드 |
 | --- | --- | --- |
-| listings | 사용자가 게시한 물품 | title, owner, category, price, deposit, image |
+| listings | 사용자가 게시한 물품 | title, owner, category, price, deposit, image, photos, coverPhotoId |
 | rentals | 대여 신청부터 반납까지의 거래 | itemId, renterId, lenderId, start, end, total, status, inspection |
 | messages | 거래 채팅 메시지 한 건 | rentalId, sender, text, sentAt |
 | notices | 거래 알림 한 건 | rentalId, role, message, read |

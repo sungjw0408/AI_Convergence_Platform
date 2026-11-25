@@ -1,8 +1,8 @@
-backend/.venv/
-backend/.model-cache/
+backend/.venv
+backend/.model-cache
 __pycache__/
 .DS_Store
-node_modules/
+node_modules
 .firebase/
 firebase-debug*.log
 firestore-debug*.log
