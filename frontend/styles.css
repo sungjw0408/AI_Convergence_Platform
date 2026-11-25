@@ -806,20 +806,14 @@ dialog::backdrop { backdrop-filter: none; }
 .comparison input[type=file] { width: 100%; margin-top: 5px; font-size: 12px; }
 
 /* Dedicated AI room, separate from participant chats. */
-.ai-room { gap: 14px; }
 .ai-room-intro { display: flex; align-items: center; gap: 12px; }
 .ai-room-avatar { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; color: var(--green); background: var(--green-soft); flex-shrink: 0; }
 .ai-room-avatar svg { width: 24px; height: 24px; }
 .ai-room-intro p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .ai-room-intro .button { margin-left: auto; min-height: 38px; padding: 7px 12px; font-size: 13px; }
 .ai-room-note { line-height: 1.65; margin: 0; }
-.ai-room-history { min-height: 30dvh; max-height: 52dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 18px 12px; border-radius: 20px; background: #f0f5ee; overscroll-behavior: contain; }
-.ai-room-message { max-width: 92%; align-self: flex-start; min-width: 0; }
-.ai-room-message.mine { align-self: flex-end; }
-.ai-room-speaker { display: block; margin: 0 5px 6px; font-size: 12px; color: var(--muted); }
-.ai-room-message.mine .ai-room-speaker { text-align: right; }
-.ai-room-bubble { background: white; border: 1px solid var(--line); padding: 13px 15px; border-radius: 4px 18px 18px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
-.ai-room-message.mine .ai-room-bubble { background: #dcebd5; border-color: #dcebd5; border-radius: 18px 4px 18px 18px; }
+.ai-room-history { min-height: 30dvh; }
+.conversation-content .message > p { white-space: pre-wrap; }
 .ai-room-items { display: grid; gap: 8px; margin-top: 9px; }
 .ai-room-item { display: flex; gap: 10px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 10px; text-decoration: none; color: inherit; }
 .ai-room-item > div { min-width: 0; }
@@ -831,8 +825,8 @@ dialog::backdrop { backdrop-filter: none; }
 .ai-room-pending { font-size: 13px; color: var(--muted); margin: 0; }
 .ai-room-examples { display: flex; gap: 7px; flex-wrap: wrap; }
 .ai-room-examples button { border: 1px solid var(--line); border-radius: 16px; padding: 9px 12px; color: var(--green); background: white; text-align: left; font-size: 12px; }
-.ai-room-compose { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; position: sticky; bottom: calc(var(--nav) + env(safe-area-inset-bottom)); background: #fafbf9; padding: 8px 0; }
-.ai-room-compose textarea { min-width: 0; width: 100%; resize: vertical; max-height: 160px; border: 1px solid var(--line); border-radius: 16px; padding: 12px; font: inherit; background: #fff; }
+.conversation-content .compose :is(input, textarea) { box-sizing: border-box; min-width: 0; width: 100%; min-height: 46px; border: 1px solid var(--edge); border-radius: 16px; padding: 12px; font: inherit; background: #fff; }
+.ai-room-compose textarea { resize: vertical; max-height: 160px; }
 .ai-room-compose .button { align-self: end; }
 .ai-room-error { color: #8b3434; border: 1px solid #e4c5c5; border-radius: 12px; padding: 10px; }
 .ai-room-error p { margin: 0 0 8px; }
