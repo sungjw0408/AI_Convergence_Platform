@@ -6,10 +6,10 @@ import {
   rentalDays, suggestedFields, writeState,
 } from "./model.js?v=rento-home-5-ren";
 import {
-  aiRoomPage, chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
+  aiRoomPage, chatPage, collectionPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalEstimate, rentalsPage, tradePage,
-} from "./views.js?v=rento-home-5-ren";
+} from "./views.js?v=rento-collections-1";
 
 const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
@@ -120,10 +120,9 @@ function render() {
   else if (page === "membership") content = membershipPage();
   else if (page === "saved" || page === "my-listings") {
     const items = allItems().filter((item) => page === "saved" ? isFavorite(item.id) : item.owner === role);
-    const title = page === "saved" ? "관심 물품" : "내가 올린 물품";
-    content = pageHeader(title, "#profile") + `<div class="content">${items.length ? rowsFor(items)
-      : `<p class="notice">${page === "saved" ? "아직 관심 물품이 없어요." : "아직 올린 물품이 없어요."}</p>`}</div>`;
+    content = collectionPage(page, items.length, items.length ? rowsFor(items) : "");
   }
+  screen.dataset.page = page;
   screen.innerHTML = content ?? missingPage();
   const history = screen.querySelector(".chat-history");
   if (history) history.scrollTop = history.scrollHeight;
@@ -282,7 +281,13 @@ document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const { action, id } = target.dataset;
-  if (action === "close") dialog.close();
+  if (action === "rental-filter") {
+    const groups = { progress: ["confirmed", "handover", "active", "checking", "disputed"] };
+    screen.querySelectorAll('[data-action="rental-filter"]').forEach(button => button.setAttribute("aria-pressed", String(button === target)));
+    const rows = [...screen.querySelectorAll("[data-rental-status]")];
+    rows.forEach(row => { row.hidden = id !== "all" && !(groups[id] ?? [id]).includes(row.dataset.rentalStatus); });
+    screen.querySelector(".filter-empty").hidden = rows.some(row => !row.hidden);
+  } else if (action === "close") dialog.close();
   else if (action === "category" && categories.includes(id)) {
     filters.category = id;
     screen.querySelectorAll(".chip").forEach((chip) => chip.setAttribute("aria-pressed", String(chip === target)));
@@ -359,6 +364,14 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "chat-search") {
+    const query = event.target.value.trim().toLowerCase();
+    const rows = [...screen.querySelectorAll("[data-chat-search]")];
+    rows.forEach(row => { row.hidden = !row.dataset.chatSearch.includes(query); });
+    screen.querySelector(".filter-empty").hidden = !query || rows.some(row => !row.hidden);
+    const empty = screen.querySelector(".account-empty");
+    if (empty) empty.hidden = Boolean(query);
+  }
   if (event.target.id === "search") {
     filters.query = event.target.value;
     refreshHomeRows();
