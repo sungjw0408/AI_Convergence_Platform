@@ -1,4 +1,7 @@
 import { comparisonResult } from "./compare.js";
+import { inspectionCard } from "./inspection-view.js";
+import { photoUrl } from "./photo-store.js";
+import { faces } from "./capture.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import { categories, localDay, people, rentalDays, statuses } from "./model.js?v=rento-home-5-ren";
 
@@ -22,8 +25,8 @@ export function pageHeader(title, back) {
 }
 
 function image(item, classes = "", label = "") {
-  return item.image
-    ? `<img class="${classes}" src="${escape(item.image)}" alt="${escape(label)}">`
+  return photoUrl(item.image)
+    ? `<img class="${classes}" src="${escape(photoUrl(item.image))}" alt="${escape(label)}">`
     : `<span class="photo-placeholder ${classes}" aria-label="등록된 사진 없음">${icon("photo")}</span>`;
 }
 
@@ -144,7 +147,7 @@ export function registerPage(role, area) {
 function rentalRow(rental, item, destination = "trade") {
   return `<a class="trade-row" href="#${destination}/${rental.id}">
     ${image(item, "trade-thumbnail")}
-    <div><strong>${escape(item.title)}</strong><small>${dates(rental.start, rental.end)}</small></div>
+    <div><strong>${escape(item.title)}</strong><small>${dates(rental.start, rental.end)}</small>${rental.before || rental.inspection ? `<span class="rental-photo-link">${icon("photo")}상태 사진 확인</span>` : ""}</div>
     ${badge(rental.status)}${icon("right")}
   </a>`;
 }
@@ -167,39 +170,23 @@ function tradeButton(title, type, cls = "primary") {
   return `<button class="button ${cls}" data-action="trade-action" data-id="${type}">${title}</button>`;
 }
 
-function evidence(rental, feedback) {
-  if (!rental.before && !rental.after) return "";
-  return `<section class="stack">
-    <h2>대여 전후 사진</h2>
-    <div class="comparison">
-      <figure>${image({ image: rental.before }, "", "대여 전 상태")}<figcaption>대여 전</figcaption></figure>
-      <figure>${image({ image: rental.after }, "", "반납 후 상태")}<figcaption>반납 후</figcaption></figure>
-    </div>
-    ${rental.before && rental.after ? `<div class="stack compact">
-      <h3>AI 사진 비교</h3>
-      ${comparisonResult(rental.photoAnalysis, rental.after, escape)}
-      <p class="hint" aria-live="polite">${escape(feedback?.message)}</p>
-      <button class="button secondary" data-action="analyze-trade" ${feedback?.busy ? "disabled" : ""}>
-        ${feedback?.busy ? "두 사진 비교 중…" : rental.photoAnalysis ? "다시 비교하기" : "사진 비교하기"}</button>
-    </div>` : ""}
-  </section>`;
-}
 
-export function tradePage(rental, item, role, feedback) {
+export function tradePage(rental, item, role, feedback, selectedView) {
   const owns = role === rental.lenderId;
   const borrows = role === rental.renterId;
   const status = rental.status;
   let actions = "";
   if (status === "pending") actions = owns ? tradeButton("신청 승인", "confirm") + tradeButton("거절", "reject", "secondary")
     : borrows ? tradeButton("신청 철회", "cancel", "secondary") : "";
-  else if (status === "confirmed") actions = (owns ? tradeButton("인도 사진 등록", "handoff") : "") + tradeButton("예약 취소", "cancel", "secondary");
+  else if (status === "confirmed") actions = (owns ? tradeButton("대여 전 사진 촬영", "handoff") : "") + tradeButton("예약 취소", "cancel", "secondary");
   else if (status === "handover" && borrows) actions = tradeButton("물품·구성품 수령 확인", "receive");
-  else if (status === "active" && borrows) actions = tradeButton("반납 사진 등록 및 요청", "return");
-  else if (status === "checking" && owns) actions = tradeButton("이상 없음 · 거래 완료", "complete") + tradeButton("손상·누락 신고", "dispute", "secondary");
+  else if (status === "active" && borrows) actions = tradeButton("반납 사진 촬영", "return");
+  else if (status === "checking" && borrows) actions = `<button class="button secondary" data-action="trade-action" data-id="reshoot" ${feedback?.busy ? "disabled" : ""}>반납 사진 다시 촬영</button>`;
+  else if (status === "checking" && owns) actions = tradeButton("반납 확인 · 거래 완료", "complete") + tradeButton("손상·누락 신고", "dispute", "secondary");
   else if (status === "disputed" && role === "admin") actions = tradeButton("검토 후 반납 확인으로 돌리기", "resolve");
   else if (status === "complete" && borrows && !rental.review) actions = tradeButton("별점·후기 작성", "review");
 
-  return pageHeader("거래 상세", "#rentals") + `<div class="content stack">
+  return pageHeader("대여 상세", "#rentals") + `<div class="content stack">
     <section class="trade-overview">
       ${image(item, "trade-thumbnail")}
       <div><h2>${escape(item.title)}</h2><p class="muted">${dates(rental.start, rental.end)}</p>
@@ -212,7 +199,7 @@ export function tradePage(rental, item, role, feedback) {
     ${status === "checking" && borrows ? '<p class="notice">공급자가 반납 상태를 확인하면 거래가 완료돼요.</p>' : ""}
     ${(owns || borrows) && ["confirmed", "handover", "active", "checking", "disputed", "complete"].includes(status)
       ? `<a class="button secondary" href="#chat/${rental.id}">${icon("chat")}거래 채팅</a>` : ""}
-    ${evidence(rental, feedback)}
+    ${inspectionCard(rental, item, feedback, selectedView, escape)}
     ${rental.dispute ? `<section class="notice"><strong>분쟁 기록</strong><p>${escape(rental.dispute)}</p>${rental.resolution ? `<p>검토 의견 · ${escape(rental.resolution)}</p>` : ""}</section>` : ""}
     ${rental.review ? `<section class="notice"><strong>${"★".repeat(rental.review.rating)} · 후기</strong><p>${escape(rental.review.text)}</p></section>` : ""}
     ${actions ? `<div class="action-row">${actions}</div>` : ""}
@@ -281,7 +268,6 @@ export function profilePage(role, savedCount, listingCount) {
       <a href="#rentals">${icon("calendar")}대여 내역${icon("right")}</a>
       <a href="#saved">${icon("heart")}관심 물품<span>${savedCount}개</span>${icon("right")}</a>
       <a href="#my-listings">${icon("photo")}내가 올린 물품<span>${listingCount}개</span>${icon("right")}</a>
-      <a href="#compare">${icon("photo")}대여 전후 사진 비교${icon("right")}</a>
       <a href="#membership">${icon("sparkle")}구독 혜택${icon("right")}</a>
     </div></section>
     <section class="stack compact profile-section demo-settings">
@@ -294,18 +280,25 @@ export function profilePage(role, savedCount, listingCount) {
 }
 
 export function comparePage(demo) {
-  return pageHeader("대여 전후 사진 비교", "#profile") + `<div class="content stack">
+  return pageHeader("개발용 사진 비교", "#rentals") + `<div class="content stack">
+    <a class="button secondary" href="#dev/photo-evaluation">사진 비교 평가 열기</a>
     <form class="form-card plain" data-form="compare-demo">
       <label>비교할 사진<select name="source" ${demo.busy ? "disabled" : ""}>
         <option value="sample" ${demo.custom ? "" : "selected"}>빔프로젝터 예시</option>
-        <option value="custom" ${demo.custom ? "selected" : ""}>내 사진 두 장</option>
+        <option value="camera" ${demo.source === "camera" ? "selected" : ""}>앱 카메라로 촬영</option>
+        <option value="custom" ${demo.custom && demo.source !== "camera" ? "selected" : ""}>내 사진 두 장 (평가용)</option>
       </select></label>
+      ${demo.source === "camera" ? `<label>촬영 면<select name="face" ${demo.busy || demo.before ? "disabled" : ""}>${faces.map((face) => `<option ${face === demo.face ? "selected" : ""}>${face}</option>`).join("")}</select></label>
+        <p class="hint">인도·반납 사진은 같은 촬영 면으로 연결돼요. 다른 면은 인도 사진부터 다시 촬영해 주세요.</p>` : ""}
       <div class="comparison">${["before","after"].map((key, i) => `<figure>
         ${image({ image: demo[key] }, "", i ? "반납 사진" : "인도 사진")}
         <figcaption>${i ? "반납 후" : "대여 전"}</figcaption>
-        ${demo.custom ? `<input type="file" accept="image/*" data-compare-file="${key}" aria-label="${i ? "반납 후" : "대여 전"} 사진 선택" ${demo.busy ? "disabled" : ""}>` : ""}
+        ${demo.source === "camera" ? `<button type="button" class="button secondary" data-action="capture-demo" data-id="${key}" ${demo.busy || (i && !demo.before) ? "disabled" : ""}>${demo[key] ? "다시 촬영" : "촬영하기"}</button>`
+          : demo.custom ? `<input type="file" accept="image/*" data-compare-file="${key}" aria-label="${i ? "반납 후" : "대여 전"} 사진 선택" ${demo.busy ? "disabled" : ""}>` : ""}
       </figure>`).join("")}</div>
       <p class="hint">같은 물품의 같은 면을 비슷한 거리와 조명에서 찍어 주세요.</p>
+      <details><summary>비교 방식 설정</summary><label>방식<select name="method" ${demo.busy ? "disabled" : ""}><option value="lpips" ${demo.method === "pixel" ? "" : "selected"}>LPIPS</option><option value="pixel" ${demo.method === "pixel" ? "selected" : ""}>픽셀 차이 (기준선)</option></select></label>
+        <label>실행 범위<select name="mode" ${demo.busy ? "disabled" : ""}><option value="pipeline" ${demo.mode === "model-only" ? "" : "selected"}>품질 검사 → 정렬 → 비교</option><option value="model-only" ${demo.mode === "model-only" ? "selected" : ""}>정렬된 사진의 비교만</option></select></label></details>
       <button class="button primary" type="submit" ${demo.busy || !demo.before || !demo.after ? "disabled" : ""}>
         ${demo.busy ? "두 사진 비교 중…" : "변화 위치 찾기"}</button>
     </form>
