@@ -1,4 +1,4 @@
-// Camera originals live in IndexedDB; localStorage holds only their references.
+// Photo originals live in IndexedDB; localStorage holds only their references.
 const prefix = "capture:";
 const urls = new Map();
 let database;
@@ -8,7 +8,7 @@ function openStore() {
     const request = indexedDB.open("rento-camera-originals", 1);
     request.onupgradeneeded = () => request.result.createObjectStore("photos");
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("촬영 원본을 저장할 수 없어요. 브라우저 저장 공간을 확인해 주세요."));
+    request.onerror = () => reject(new Error("사진 원본을 저장할 수 없어요. 브라우저 저장 공간을 확인해 주세요."));
     request.onblocked = () => reject(new Error("다른 렌토 탭을 닫고 다시 시도해 주세요."));
   });
   return database.catch((error) => { database = undefined; throw error; });
@@ -20,8 +20,8 @@ export async function photoBlob(source) {
     return new Promise((resolve, reject) => {
       const request = db.transaction("photos").objectStore("photos").get(source);
       request.onsuccess = () => request.result ? resolve(request.result.blob)
-        : reject(new Error("이 브라우저에서 촬영 원본을 찾을 수 없어요."));
-      request.onerror = () => reject(new Error("촬영 원본을 읽을 수 없어요."));
+        : reject(new Error("이 브라우저에서 사진 원본을 찾을 수 없어요."));
+      request.onerror = () => reject(new Error("사진 원본을 읽을 수 없어요."));
     });
   }
   const url = new URL(source, document.baseURI);
@@ -48,9 +48,10 @@ export async function saveOriginal(capture) {
   await new Promise((resolve, reject) => {
     const transaction = db.transaction("photos", "readwrite");
     transaction.objectStore("photos").add({ blob: capture.blob, capturedAt: capture.capturedAt,
-      width: capture.width, height: capture.height, face: capture.face }, source);
+      width: capture.width, height: capture.height, face: capture.face,
+      origin: capture.origin || "camera", name: capture.name, addedAt: capture.addedAt }, source);
     transaction.oncomplete = resolve;
-    transaction.onerror = transaction.onabort = () => reject(new Error("촬영 원본을 저장하지 못했어요. 공간을 확보하고 다시 시도해 주세요."));
+    transaction.onerror = transaction.onabort = () => reject(new Error("사진 원본을 저장하지 못했어요. 공간을 확보하고 다시 시도해 주세요."));
   });
   urls.set(source, URL.createObjectURL(capture.blob));
   return source;
