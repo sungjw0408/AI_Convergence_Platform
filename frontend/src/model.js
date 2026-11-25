@@ -83,21 +83,25 @@ export function suggestedFields(title) {
 
 const storageKey = "neighbor-storage-demo-v1";
 
-export function readState() {
-  const initial = {
+export function initialState() {
+  return {
     role: "renter", area: "죽전동", favorites: [], listings: [], rentals: [], messages: {}, notices: [],
   };
+}
+
+export function readState(key = storageKey) {
+  const initial = initialState();
   try {
-    const stored = JSON.parse(localStorage.getItem(storageKey));
+    const stored = JSON.parse(localStorage.getItem(key));
     return stored ? { ...initial, ...stored } : initial;
   } catch {
     return initial;
   }
 }
 
-export function writeState(state) {
+export function writeState(state, key = storageKey) {
   try {
-    localStorage.setItem(storageKey, JSON.stringify(state));
+    localStorage.setItem(key, JSON.stringify(state));
     return true;
   } catch {
     return false;

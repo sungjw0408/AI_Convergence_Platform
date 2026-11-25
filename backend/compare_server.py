@@ -1,10 +1,12 @@
 """Run with python backend/compare_server.py --port 8093 from the repository."""
 import argparse
+import os
 from pathlib import Path
 from threading import Lock
 
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import RequestEntityTooLarge
+from rental_database import register_database
 from item_assistant import room_assist
 from photo_compare import compare, load_model, read_photo
 from photo_evaluation import run_evaluation
@@ -13,10 +15,20 @@ app = Flask(__name__, static_folder=str(Path(__file__).resolve().parents[1] / "f
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 inference_lock = Lock()
 room_lock = Lock()
+accounts_enabled = bool(os.environ.get("RENTO_FIREBASE_WEB_API_KEY") or os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"))
+if accounts_enabled:
+    from accounts import configure_accounts
+    configure_accounts(app)
+database_enabled = register_database(app, account_mode=accounts_enabled)
 
 
 @app.get("/")
+@app.get("/index.html")
 def home():
+    if database_enabled:
+        html = (Path(app.static_folder) / "index.html").read_text(encoding="utf-8")
+        mode = "accounts" if accounts_enabled else "firestore"
+        return html.replace("<head>", f'<head><meta name="rento-database" content="{mode}">'), {"Cache-Control": "no-store"}
     return app.send_static_file("index.html")
 
 

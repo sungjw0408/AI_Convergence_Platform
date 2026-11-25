@@ -3,3 +3,8 @@ backend/.model-cache
 __pycache__/
 .DS_Store
 node_modules
+.firebase/
+firebase-debug*.log
+firestore-debug*.log
+firebase-data/
+.env.rento-auth
