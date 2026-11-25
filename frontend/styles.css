@@ -830,3 +830,14 @@ dialog::backdrop { backdrop-filter: none; }
 .ai-room-compose .button { align-self: end; }
 .ai-room-error { color: #8b3434; border: 1px solid #e4c5c5; border-radius: 12px; padding: 10px; }
 .ai-room-error p { margin: 0 0 8px; }
+
+.chat-count {
+  display: inline-block;
+  align-self: center;
+  border-radius: 1em;
+  padding: .12em .5em;
+  background: #aa303d;
+  color: white;
+  font-size: .75rem;
+  line-height: 1.35;
+}

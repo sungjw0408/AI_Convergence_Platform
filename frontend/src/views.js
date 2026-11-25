@@ -226,7 +226,7 @@ const chatClock = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2
 const messageDate = (message) => Number.isFinite(message?.sentAt)
   && Number.isFinite(new Date(message.sentAt).getTime()) ? new Date(message.sentAt) : null;
 
-export function chatPage(rentals, catalog, role, threads, canChat) {
+export function chatPage(rentals, catalog, role, threads, canChat, unreadCount) {
   const conversations = rentals.filter((rental) => (rental.renterId === role || rental.lenderId === role)
     && canChat(rental)).map((rental) => ({ rental, last: threads[rental.id]?.at(-1) }))
     .sort((a, b) => (messageDate(b.last)?.getTime() ?? 0) - (messageDate(a.last)?.getTime() ?? 0));
@@ -234,12 +234,13 @@ export function chatPage(rentals, catalog, role, threads, canChat) {
     ? conversations.map(({ rental, last }) => {
       const item = catalog(rental.itemId);
       const time = messageDate(last);
+      const count = unreadCount(rental.id);
       return `<a class="conversation-row" href="#chat/${escape(rental.id)}">
         <span class="avatar">${icon("user")}</span>
         <div class="conversation-summary"><div class="conversation-heading"><strong>${escape(partnerName(rental, role))}</strong>${badge(rental.status)}</div>
           <p>${escape(item.title)}</p><p>${last ? (last.sender === role ? "나: " : "") + escape(last.text) : "아직 메시지가 없어요."}</p>
           <small>${dates(rental.start, rental.end)}${time ? ` · <time datetime="${time.toISOString()}">${localDay(time) === localDay() ? chatClock.format(time) : chatDay.format(time)}</time>` : ""}</small></div>
-        ${image(item, "chat-thumbnail", item.title)}
+        ${count ? `<b class="chat-count" aria-label="안 읽은 메시지 ${count}개">${count}</b>` : ""}${image(item, "chat-thumbnail", item.title)}
       </a>`;
     }).join("")
     : `<div class="empty-icon">${icon("chat")}</div>${empty("아직 대화가 없어요", "예약이 확정되면 상대와 인도 장소를 조율할 수 있어요.")}<a class="button secondary empty-action" href="#home">빌릴 물품 둘러보기</a>`}</div>`;

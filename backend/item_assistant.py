@@ -99,6 +99,19 @@ def room_assist(data):
         allowed = {item["id"] for item in items}
         if any(item_id not in allowed for item_id in ids):
             raise ValueError()
+        leaked_id = re.search(r"item_ids?", reply, re.IGNORECASE)
+        if leaked_id:
+            if not ids:
+                words = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", messages[-1]["content"].lower()))
+                words -= {"주말에", "집에서", "싶어요", "주세요", "추천해", "보고", "물건"}
+                matches = [item for item in items if any(
+                    word in (item["title"] + " " + item["description"]).lower() for word in words)]
+                ids = [item["id"] for item in matches[:3]]
+            reply = "현재 목록에서 조건에 맞는 물품을 확인하기 어려워요. 원하는 물품 이름을 알려주세요."
+        if ids and (leaked_id or any(item["title"] not in reply for item in items if item["id"] in ids)):
+            titles = {item["id"]: item["title"] for item in items}
+            names = ", ".join(titles[key] for key in dict.fromkeys(ids))
+            reply = f"추천 물품은 ‘{names}’입니다. 가격과 대여 조건은 아래 카드에서 확인해 주세요."
         return {"text": reply.strip(), "item_ids": list(dict.fromkeys(ids)), "model": model}
     except (ValueError, KeyError, TypeError):
         raise RuntimeError("AI 답변을 읽을 수 없어요. 다시 보내기를 눌러 주세요.") from None

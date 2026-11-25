@@ -98,6 +98,7 @@ const rowsFor = (items, filtered = false) => listingRows(items, isFavorite, (ite
 function render() {
   const [page, id] = route();
   const role = state.role;
+  const unreadCount = (id) => (state.messages[id] ?? []).filter(m => m.unreadFor === role).length;
   let content;
   if (page === "home") content = home({
     area: state.area, ...filters, rows: rowsFor(filteredListings(), true),
@@ -110,10 +111,20 @@ function render() {
   else if (page === "trade") {
     const rental = rentalById(id);
     if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id));
-  } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role, state.messages, chatAllowed);
+  } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role, state.messages, chatAllowed, unreadCount);
   else if (page === "chat") {
     const rental = rentalById(id);
-    if (isParty(rental) && chatAllowed(rental)) content = conversationPage(rental, itemById(rental.itemId), state.messages[id] ?? [], role);
+    if (isParty(rental) && chatAllowed(rental)) {
+      const messages = state.messages[id] ?? [];
+      if (unreadCount(id)) {
+        for (const message of messages) if (message.unreadFor === role) delete message.unreadFor;
+        for (const notice of state.notices) {
+          if (notice.chat && notice.role === role && notice.rentalId === id) notice.read = true;
+        }
+        save();
+      }
+      content = conversationPage(rental, itemById(rental.itemId), messages, role);
+    }
   } else if (page === "profile") content = profilePage(role, allItems().filter((item) => isFavorite(item.id)).length,
     allItems().filter((item) => item.owner === role).length);
   else if (page === "compare") content = comparePage(demo);
@@ -135,8 +146,9 @@ function render() {
     ["home", "home", "홈"], ["rentals", "calendar", role === "admin" ? "분쟁 검토" : "내 대여"],
     ["chat", "chat", "채팅"], ["profile", "user", "내 정보"],
   ];
+  const total = state.rentals.filter(r => isParty(r) && chatAllowed(r)).reduce((sum, r) => sum + unreadCount(r.id), 0);
   navigation.innerHTML = tabs.map(([target, symbol, label]) =>
-    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}>${icon(symbol)}<span>${label}</span></a>`).join("");
+    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}>${icon(symbol)}<span>${label}${target === "chat" && total ? ` <b class="chat-count" aria-label="안 읽은 메시지 ${total}개">${total}</b>` : ""}</span></a>`).join("");
 }
 
 function chatAllowed(rental) {
@@ -234,7 +246,7 @@ function openNotices() {
   const indicator = screen.querySelector(".notification i");
   if (indicator) indicator.remove();
   showDialog("알림", notices.length ? `<div class="menu-list">${notices.map((notice) =>
-    `<a href="#trade/${notice.rentalId}">${escape(notice.message)}${icon("right")}</a>`).join("")}</div>`
+    `<a href="#${notice.chat ? "chat" : "trade"}/${escape(notice.rentalId)}">${escape(notice.message)}${icon("right")}</a>`).join("")}</div>`
     : '<p class="notice">새 알림이 없어요.</p>');
 }
 
@@ -535,7 +547,10 @@ async function submit(form) {
   if (kind === "message" && (owns || borrows) && chatAllowed(rental)) {
     const message = fields.get("message").trim();
     if (!message || message.length > 350) return;
-    (state.messages[id] ??= []).push({ sender: state.role, text: message, sentAt: Date.now() });
+    const recipient = owns ? rental.renterId : rental.lenderId;
+    (state.messages[id] ??= []).push({ sender: state.role, text: message, sentAt: Date.now(), unreadFor: recipient });
+    state.notices.unshift({ role: recipient, rentalId: id, chat: true, read: false,
+      message: `${itemById(rental.itemId).title} 거래에 새 메시지가 도착했어요.` });
     save();
     render();
     document.querySelector(".compose input").focus();
