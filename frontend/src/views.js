@@ -337,7 +337,7 @@ export function aiRoomPage(session, itemById) {
   return pageHeader("AI에게 물어보기", "#home") + `<div class="content stack conversation-content ai-room">
     <div class="ai-room-intro"><span class="ai-room-avatar">${icon("sparkle")}</span><div><strong>렌토 AI</strong><p>필요한 물건을 함께 찾아봐요.</p></div>
       <button type="button" class="button secondary" data-action="ai-new"${session.busy ? " disabled" : ""}>새 대화</button></div>
-    <p class="hint ai-room-note">이곳에 입력한 질문과 물품 목록을 로컬 AI가 참고해요. 이웃과 나눈 채팅은 전달하지 않아요. 답변은 참고용이며 예약은 직접 신청해 주세요.</p>
+    <p class="hint ai-room-note">이곳에 입력한 질문과 물품 목록을 AI 모델이 참고해요. 이웃과 나눈 채팅은 전달하지 않아요. 답변은 참고용이며 예약은 직접 신청해 주세요.</p>
     <div class="messages chat-history ai-room-history" role="log" aria-label="AI와의 대화" tabindex="0">
       ${bubbles || `<article class="message"><small>렌토 AI</small><p>안녕하세요! 어떤 일에 쓸 물건을 찾고 계세요? 용도나 예산을 알려주시면 등록된 물품에서 찾아드릴게요.</p></article>`}
       ${session.busy ? `<article class="message outgoing"><small>나</small><p>${escape(session.pending)}</p></article><p class="ai-room-pending" role="status">렌토 AI가 답변을 준비하고 있어요…</p>` : ""}
