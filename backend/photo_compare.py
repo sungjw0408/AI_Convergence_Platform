@@ -1,6 +1,7 @@
 """Local image-pair inspection. All region coordinates refer to the return photo."""
 from functools import lru_cache
 from pathlib import Path
+from time import perf_counter
 
 import cv2
 import lpips
@@ -43,7 +44,7 @@ def align(before, after):
     if features_a is None or features_b is None or len(features_b) < 2:
         return None
     pairs = cv2.BFMatcher().knnMatch(features_a, features_b, k=2)
-    matches = [m for m, n in pairs if m.distance < 0.74 * n.distance]
+    matches = [pair[0] for pair in pairs if len(pair) == 2 and pair[0].distance < 0.74 * pair[1].distance]
     if len(matches) < 10:
         return None
     src = np.float32([points_a[m.queryIdx].pt for m in matches])
@@ -68,31 +69,86 @@ def to_tensor(rgb):
     return torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).float().div(127.5).sub(1)
 
 
+def quality(photo):
+    """Conservative, scene-dependent screening; not proof of visibility or focus."""
+    gray = cv2.cvtColor(photo, cv2.COLOR_RGB2GRAY)
+    # Ignore the outside border when computing these rough frame-level metrics.
+    h, w = gray.shape
+    center = gray[h//10:h-h//10, w//10:w-w//10]
+    sharpness = float(cv2.Laplacian(center, cv2.CV_64F).var())
+    dark = float((center < 18).mean())
+    bright = float((center > 242).mean())
+    reason = "dark" if dark > 0.85 else "bright" if bright > 0.85 else "blur" if sharpness < 12 else "ok"
+    return {"sharpness": round(sharpness, 2), "darkFraction": round(dark, 3),
+            "brightFraction": round(bright, 3), "reason": reason}
+
+
+def pixel_regions(reference, after, valid):
+    """Simple registered pixel-difference baseline, using the same exposure correction."""
+    distance = np.max(cv2.absdiff(reference, after), axis=2)
+    mask = np.uint8((distance > 35) & valid)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    h, w = mask.shape
+    _, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    return [[int(x)/w, int(y)/h, int(rw)/w, int(rh)/h]
+            for x, y, rw, rh, area in sorted(stats[1:], key=lambda row: row[4], reverse=True)
+            if area >= max(24, h*w*0.0003)][:6]
+
+
 @torch.inference_mode()
-def compare(before, after):
-    result = {"model": MODEL, "status": "retake", "regions": []}
-    aligned = align(before, after)
-    if aligned is None:
+def compare(before, after, method="lpips", model_only=False):
+    started = perf_counter()
+    result = {"model": MODEL if method == "lpips" else "OpenCV · 픽셀 차이", "status": "retake", "regions": [],
+              "stages": [], "mode": "model-only" if model_only else "pipeline"}
+    def finish(reason=None):
+        result["reason"] = reason
+        result["durationMs"] = round((perf_counter() - started) * 1000)
         return result
-    reference, valid = aligned
+
+    if model_only:
+        if before.shape != after.shape:
+            return finish("size")
+        reference, valid = before, np.ones(after.shape[:2], dtype=bool)
+        result["stages"].append({"name": "quality", "status": "skipped"})
+        result["stages"].append({"name": "alignment", "status": "skipped"})
+    else:
+        checks = {"before": quality(before), "after": quality(after)}
+        result["quality"] = checks
+        failed = next((key for key, check in checks.items() if check["reason"] != "ok"), None)
+        result["stages"].append({"name": "quality", "status": "blocked" if failed else "passed"})
+        if failed:
+            result["failedPhoto"] = failed
+            return finish(checks[failed]["reason"])
+        aligned = align(before, after)
+        result["stages"].append({"name": "alignment", "status": "passed" if aligned else "blocked"})
+        if aligned is None:
+            return finish("alignment")
+        reference, valid = aligned
     # Match modest global exposure changes before scoring local appearance.
     lo_a, hi_a = np.percentile(cv2.cvtColor(reference, cv2.COLOR_RGB2GRAY)[valid], (10, 90))
     lo_b, hi_b = np.percentile(cv2.cvtColor(after, cv2.COLOR_RGB2GRAY)[valid], (10, 90))
-    gain = np.clip((hi_b - lo_b) / max(1, hi_a - lo_a), 0.8, 1.25) if hi_a > lo_a else 1
-    offset = np.clip(lo_b - gain * lo_a, -30, 30)
+    gain = np.clip((hi_b - lo_b) / max(1, hi_a - lo_a), 0.8, 1.25) if hi_a > lo_a and not model_only else 1
+    offset = np.clip(lo_b - gain * lo_a, -30, 30) if not model_only else 0
     reference = np.rint(np.clip(reference.astype(np.float32) * gain + offset, 0, 255)).astype(np.uint8)
     reference[~valid] = after[~valid]
+    if method == "pixel":
+        result["regions"] = pixel_regions(reference, after, valid)
+        result["status"] = "changes" if result["regions"] else "clear"
+        result["stages"].append({"name": "comparison", "status": "passed"})
+        return finish()
     distance = load_model()(to_tensor(reference), to_tensor(after))[0, 0].numpy()
     # LPIPS is a distance, not a probability. Suppress near-uniform drift and
     # require a local contrast above the background level in this particular pair.
     values = distance[valid]
     median = np.median(values)
     if median > 0.15:
-        return result
+        result["stages"].append({"name": "comparison", "status": "blocked"})
+        return finish("appearance")
     cutoff = max(0.10, median + 6 * np.median(np.abs(values - median)))
     change = np.uint8((distance > cutoff) & valid)
     if change.sum() > 0.35 * valid.sum():
-        return result
+        result["stages"].append({"name": "comparison", "status": "blocked"})
+        return finish("appearance")
     height, width = distance.shape
     _, labels, stats, _ = cv2.connectedComponentsWithStats(change, connectivity=8)
     regions = []
@@ -105,4 +161,6 @@ def compare(before, after):
         regions.append((peak, [int(x)/width, int(y)/height, int(w)/width, int(h)/height]))
     regions.sort(key=lambda pair: pair[0], reverse=True)
     boxes = [box for _, box in regions[:6]]
-    return {**result, "status": "changes" if boxes else "clear", "regions": boxes}
+    result.update(status="changes" if boxes else "clear", regions=boxes)
+    result["stages"].append({"name": "comparison", "status": "passed"})
+    return finish()
