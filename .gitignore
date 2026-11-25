@@ -1,5 +1,0 @@
-backend/.venv/
-backend/.model-cache/
-__pycache__/
-.DS_Store
-node_modules/
