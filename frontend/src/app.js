@@ -1,3 +1,4 @@
+import { newAIConversation, sendAIMessage } from "./ai-room.js";
 import { comparePhotos } from "./compare.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import {
@@ -5,9 +6,9 @@ import {
   rentalDays, suggestedFields, writeState,
 } from "./model.js?v=rento-home-5-ren";
 import {
-  chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
+  aiRoomPage, chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
-  rentalsPage, tradePage, won,
+  rentalEstimate, rentalsPage, tradePage,
 } from "./views.js?v=rento-home-5-ren";
 
 const screen = document.querySelector("#screen");
@@ -102,6 +103,7 @@ function render() {
     area: state.area, ...filters, rows: rowsFor(filteredListings(), true),
     unread: state.notices.some((notice) => notice.role === role && !notice.read),
   });
+  else if (page === "assistant") content = aiRoomPage(assistantSession(), itemById);
   else if (page === "item" && itemById(id)) content = itemPage(itemById(id), role, filters.date);
   else if (page === "new") content = registerPage(role, state.area);
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
@@ -125,8 +127,10 @@ function render() {
   screen.innerHTML = content ?? missingPage();
   const history = screen.querySelector(".chat-history");
   if (history) history.scrollTop = history.scrollHeight;
+  const aiHistory = screen.querySelector(".ai-room-history");
+  if (aiHistory) aiHistory.scrollTop = aiHistory.scrollHeight;
 
-  const parent = ({ compare: "profile", item: "home", new: "home", trade: "rentals", saved: "profile", membership: "profile", "my-listings": "profile" })[page] ?? page;
+  const parent = ({ assistant: "home", compare: "profile", item: "home", new: "home", trade: "rentals", saved: "profile", membership: "profile", "my-listings": "profile" })[page] ?? page;
   const tabs = [
     ["home", "home", "홈"], ["rentals", "calendar", role === "admin" ? "분쟁 검토" : "내 대여"],
     ["chat", "chat", "채팅"], ["profile", "user", "내 정보"],
@@ -238,6 +242,42 @@ function refreshHomeRows() {
   document.querySelector("#listings").innerHTML = rowsFor(filteredListings(), true);
 }
 
+const assistantSessions = new Map();
+function assistantSession(role = state.role) {
+  if (!assistantSessions.has(role)) assistantSessions.set(role, newAIConversation());
+  return assistantSessions.get(role);
+}
+
+function assistantItems() {
+  return allItems().filter(item => item.owner !== state.role).map(item => ({
+    id: item.id, title: item.title, category: item.category, neighborhood: item.neighborhood,
+    price: item.price, description: item.description ?? "",
+    availability: availabilityLabel(item, false),
+  }));
+}
+
+async function sendAssistant() {
+  const role = state.role, session = assistantSession(role);
+  if (session.busy) return;
+  const request = sendAIMessage(session, assistantItems(), localDay());
+  render();
+  await request;
+  if (route()[0] === "assistant" && state.role === role) {
+    render();
+    screen.querySelector('[name="question"]')?.focus();
+  }
+}
+
+document.addEventListener("input", ({target}) => {
+  if (target.matches('.ai-room-compose textarea')) assistantSession().draft = target.value;
+});
+document.addEventListener("keydown", event => {
+  if (event.target.matches('.ai-room-compose textarea') && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    event.target.form.requestSubmit();
+  }
+});
+
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
@@ -258,11 +298,19 @@ document.addEventListener("click", (event) => {
     render();
     screen.querySelector('[data-action="filter-dates"]').focus();
   } else if (action === "recommend") {
-    showDialog("AI에게 물어보기", `<form data-form="recommend" class="form-card plain">
-      <p class="hint">시연용 물품을 용도에 맞춰 추천해요.</p>
-      <label>어떤 물건이 필요하세요?<input name="prompt" maxlength="150" placeholder="예시 · 주말에 영화 보고 싶어" required></label>
-      <button class="button primary" type="submit">추천 받기</button>
-      <div id="recommendation" aria-live="polite"></div></form>`);
+    navigate("assistant");
+  } else if (action === "ai-new") {
+    if (assistantSession().busy) return;
+    assistantSessions.set(state.role, newAIConversation());
+    render();
+    screen.querySelector('[name="question"]')?.focus();
+  } else if (action === "ai-example") {
+    if (assistantSession().busy) return;
+    assistantSession().draft = target.dataset.text;
+    render();
+    screen.querySelector('.ai-room-compose')?.requestSubmit();
+  } else if (action === "ai-retry") {
+    screen.querySelector('.ai-room-compose')?.requestSubmit();
   } else if (action === "favorite" && itemById(id)) {
     const selected = !isFavorite(id);
     state.favorites = selected ? [...state.favorites, favoriteKey(id)] : state.favorites.filter((key) => key !== favoriteKey(id));
@@ -323,8 +371,7 @@ document.addEventListener("input", (event) => {
     if (start && end && end < start) form.elements.end.value = start;
     if (form.dataset.form === "request") {
       const item = itemById(form.dataset.id);
-      const days = rentalDays(start, form.elements.end.value);
-      document.querySelector("#estimate").textContent = days > 0 ? won(item.price * days) : "날짜를 선택해 주세요";
+      form.querySelector("#estimate").textContent = rentalEstimate(item, start, form.elements.end.value);
       formError(form, "");
     }
   }
@@ -421,20 +468,9 @@ async function submit(form) {
     return;
   }
 
-  if (kind === "recommend") {
-    const prompt = fields.get("prompt").trim();
-    const category = /영화|촬영|프로젝터|전자|카메라|화면|영상/.test(prompt) ? "디지털"
-      : /조립|수리|드릴|공구|선반/.test(prompt) ? "공구"
-      : /청소|높은|사다리|전구|정리|생활/.test(prompt) ? "생활용품" : "";
-    const available = allItems().filter((item) => item.owner !== state.role
-      && (filters.maxPrice === null || item.price <= filters.maxPrice)
-      && (!filters.date.start || !findAvailability(item, filters.date.start, filters.date.end, state.rentals)));
-    const suggestions = category ? available.filter((item) => item.category === category)
-      : available.filter((item) => prompt.includes(item.title));
-    form.querySelector("#recommendation").innerHTML = suggestions.length
-      ? `<div class="menu-list">${suggestions.slice(0, 3).map((item) =>
-        `<a href="#item/${item.id}">${escape(item.title)} <span>${won(item.price)}/일</span>${icon("right")}</a>`).join("")}</div>`
-      : '<p class="notice">조건에 맞는 예시 물품을 찾지 못했어요. 용도를 조금 더 구체적으로 입력해 보세요.</p>';
+  if (kind === "ai-room") {
+    assistantSession().draft = fields.get("question") ?? "";
+    await sendAssistant();
     return;
   }
 
@@ -443,13 +479,13 @@ async function submit(form) {
     if (!item || item.owner === state.role || state.role === "admin") return;
     const error = findAvailability(item, date.start, date.end, state.rentals);
     const same = state.rentals.some((rental) => rental.status === "pending" && rental.itemId === id
-      && rental.renterId === state.role && rental.start === date.start && rental.end === date.end);
+      && rental.renterId === state.role && rental.start <= date.end && date.start <= rental.end);
     if (error || same) {
-      formError(form, error || "같은 날짜로 이미 신청했어요.");
+      formError(form, error || "승인 대기 중인 내 신청과 날짜가 겹쳐요. 거래 내역에서 기존 신청을 철회한 뒤 다시 신청해 주세요.");
       return;
     }
     const rental = { id: newId(), itemId: id, renterId: state.role, lenderId: item.owner,
-      ...date, total: item.price * rentalDays(date.start, date.end), status: "pending" };
+      ...date, total: item.price * rentalDays(date.start, date.end), deposit: item.deposit ?? 0, status: "pending" };
     state.rentals.unshift(rental);
     announce(item.owner, rental, "새 대여 신청이 도착했어요.");
     save();
@@ -462,6 +498,11 @@ async function submit(form) {
     const title = fields.get("title").trim();
     const description = fields.get("description").trim();
     const price = Number(fields.get("price"));
+    const deposit = Number(fields.get("deposit"));
+    if (!Number.isSafeInteger(deposit) || deposit < 0 || deposit > 10000000) {
+      formError(form, "보증금은 0원부터 1,000만 원까지 1원 단위로 입력해 주세요.");
+      return;
+    }
     const category = fields.get("category");
     const area = fields.get("neighborhood");
     if (!title || !description || !categories.slice(1).includes(category) || !neighborhoods.includes(area)
@@ -476,7 +517,7 @@ async function submit(form) {
     const role = state.role;
     const photo = await readPhoto(fields.get("photo"));
     if (role !== state.role || !form.isConnected) return;
-    state.listings.unshift({ id: newId(), title, description, price, owner: role, category,
+    state.listings.unshift({ id: newId(), title, description, price, deposit, owner: role, category,
       neighborhood: area, image: photo, availableFrom: date.start, availableTo: date.end });
     save();
     filters.query = "";

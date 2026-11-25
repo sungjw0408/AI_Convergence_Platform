@@ -81,6 +81,13 @@ export function home({ area, query, category, date, maxPrice, rows, unread }) {
     </div>`;
 }
 
+export function rentalEstimate(item, start, end) {
+  const days = rentalDays(start, end);
+  if (!(days >= 1)) return "시작일과 종료일을 선택해 주세요.";
+  const fee = item.price * days;
+  return `대여료 ${won(fee)} (${days}일) + 보증금 ${won(item.deposit ?? 0)} = ${won(fee + (item.deposit ?? 0))}`;
+}
+
 export function itemPage(item, role, date) {
   return pageHeader("물품 상세", "#home") + `<div class="content">
     ${image(item, "detail-photo", item.title)}
@@ -88,6 +95,7 @@ export function itemPage(item, role, date) {
       <p class="muted">${escape(item.category)} · ${escape(item.neighborhood)}</p>
       <h2>${escape(item.title)}</h2>
       <p class="detail-rate">${won(item.price)} <span>/ 일</span></p>
+      <p>보증금 · ${item.deposit ? won(item.deposit) + " (거래당 1회)" : "없음"}</p>
       <p>${escape(item.description)}</p>
       ${item.weekends ? '<p class="availability">주말 대여 가능</p>' : ""}
       ${item.availableFrom ? `<p class="availability">대여 가능 기간 · ${dates(item.availableFrom, item.availableTo)}</p>` : ""}
@@ -96,7 +104,8 @@ export function itemPage(item, role, date) {
     `<form data-form="request" data-id="${item.id}" class="form-card">
       <h2>대여 신청</h2>
       ${dateInputs(date)}
-      <div class="total"><span>예상 대여료</span><strong id="estimate">${date.start ? won(item.price * rentalDays(date.start, date.end)) : "날짜를 선택해 주세요"}</strong></div>
+      <p id="estimate" aria-live="polite">${rentalEstimate(item, date.start, date.end)}</p>
+      <p class="hint">신청 시 금액이 거래 내역에 저장돼요. 보증금 수령과 반환은 당사자가 직접 확인해 주세요.</p>
       <p class="form-error" role="alert" hidden></p>
       ${button("대여 신청하기")}
     </form>`}
@@ -124,6 +133,7 @@ export function registerPage(role, area) {
         <label>하루 대여료 (원)<input type="number" name="price" inputmode="numeric" min="0" max="10000000" step="1" required></label>
       </div>
       <label>거래 지역<select name="neighborhood"><option>${area}</option><option>${area === "죽전동" ? "보정동" : "죽전동"}</option></select></label>
+      <label>보증금 (원)<input type="number" name="deposit" inputmode="numeric" min="0" max="10000000" step="1" placeholder="없으면 0원"></label>
       <fieldset><legend>대여 가능 기간 <span class="hint">선택</span></legend>${dateInputs({}, { required: false })}</fieldset>
       <label>물품 설명<textarea name="description" rows="4" maxlength="600" placeholder="물품 상태나 함께 제공하는 구성품을 적어주세요." required></textarea></label>
       <p class="form-error" role="alert" hidden></p>
@@ -192,7 +202,9 @@ export function tradePage(rental, item, role, feedback) {
   return pageHeader("거래 상세", "#rentals") + `<div class="content stack">
     <section class="trade-overview">
       ${image(item, "trade-thumbnail")}
-      <div><h2>${escape(item.title)}</h2><p class="muted">${dates(rental.start, rental.end)}</p><strong>${won(rental.total)}</strong></div>
+      <div><h2>${escape(item.title)}</h2><p class="muted">${dates(rental.start, rental.end)}</p>
+        <p>신청 대여료 ${won(rental.total)} · 보증금 ${won(rental.deposit ?? 0)}</p>
+        <strong>신청 당시 합계 ${won(rental.total + (rental.deposit ?? 0))}</strong></div>
       ${badge(status)}
     </section>
     ${status === "active" && owns ? '<p class="notice">대여자의 반납 요청을 기다리고 있어요.</p>' : ""}
@@ -320,4 +332,36 @@ export function modal(title, content) {
 
 export function missingPage() {
   return pageHeader("화면을 열 수 없어요", "#home") + `<div class="content">${empty("찾을 수 없는 화면이에요", "홈에서 다시 시작해 주세요.")}</div>`;
+}
+
+
+export function aiRoomPage(session, itemById) {
+  const suggestions = ["주말에 집에서 영화 보고 싶어요", "가구 조립에 쓸 공구가 필요해요", "하루 5천 원 이하로 추천해 주세요"];
+  const bubbles = session.messages.map(message => {
+    const mine = message.role === "user";
+    const items = (message.itemIds ?? []).map(itemById).filter(Boolean);
+    return `<article class="message${mine ? " outgoing" : ""}">
+      <small>${mine ? "나" : "렌토 AI"}</small>
+      <p>${escape(message.text)}</p>
+      ${items.length ? `<div class="ai-room-items">${items.map(item => `<a class="ai-room-item" href="#item/${escape(item.id)}">
+        ${image(item, "trade-thumbnail", item.title)}<div><strong>${escape(item.title)}</strong><p>${won(item.price)} / 일 · ${escape(item.neighborhood)}</p><small>상세에서 대여 날짜와 조건 확인</small></div>${icon("right")}</a>`).join("")}</div>` : ""}
+    </article>`;
+  }).join("");
+  return pageHeader("AI에게 물어보기", "#home") + `<div class="content stack conversation-content ai-room">
+    <div class="ai-room-intro"><span class="ai-room-avatar">${icon("sparkle")}</span><div><strong>렌토 AI</strong><p>필요한 물건을 함께 찾아봐요.</p></div>
+      <button type="button" class="button secondary" data-action="ai-new"${session.busy ? " disabled" : ""}>새 대화</button></div>
+    <p class="hint ai-room-note">이곳에 입력한 질문과 물품 목록을 로컬 AI가 참고해요. 이웃과 나눈 채팅은 전달하지 않아요. 답변은 참고용이며 예약은 직접 신청해 주세요.</p>
+    <div class="messages chat-history ai-room-history" role="log" aria-label="AI와의 대화" tabindex="0">
+      ${bubbles || `<article class="message"><small>렌토 AI</small><p>안녕하세요! 어떤 일에 쓸 물건을 찾고 계세요? 용도나 예산을 알려주시면 등록된 물품에서 찾아드릴게요.</p></article>`}
+      ${session.busy ? `<article class="message outgoing"><small>나</small><p>${escape(session.pending)}</p></article><p class="ai-room-pending" role="status">렌토 AI가 답변을 준비하고 있어요…</p>` : ""}
+    </div>
+    ${!session.messages.length && !session.busy ? `<div class="ai-room-examples">${suggestions.map(text => `<button type="button" data-action="ai-example" data-text="${escape(text)}">${escape(text)}</button>`).join("")}</div>` : ""}
+    ${session.error ? `<div class="ai-room-error" role="alert"><p>${escape(session.error)}</p><button type="button" class="button secondary" data-action="ai-retry">다시 보내기</button></div>` : ""}
+    <form class="compose ai-room-compose" data-form="ai-room">
+      <label class="sr-only" for="ai-question">AI에게 보낼 질문</label>
+      <textarea id="ai-question" name="question" rows="1" maxlength="500" placeholder="용도나 궁금한 점을 물어보세요" required${session.busy ? " disabled" : ""}>${escape(session.draft)}</textarea>
+      <button type="submit" class="button primary"${session.busy ? " disabled" : ""}>${session.busy ? "답변 중" : "보내기"}</button>
+    </form>
+    <p class="hint">Enter로 전송 · Shift+Enter로 줄바꿈 · 대화는 현재 탭에서만 유지돼요.</p>
+  </div>`;
 }

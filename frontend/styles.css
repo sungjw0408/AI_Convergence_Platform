@@ -804,3 +804,29 @@ dialog::backdrop { backdrop-filter: none; }
 .diff-box b { position: absolute; left: -2px; top: -2px; }
 .diff-locations { display: flex; flex-wrap: wrap; gap: 7px 12px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
 .comparison input[type=file] { width: 100%; margin-top: 5px; font-size: 12px; }
+
+/* Dedicated AI room, separate from participant chats. */
+.ai-room-intro { display: flex; align-items: center; gap: 12px; }
+.ai-room-avatar { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; color: var(--green); background: var(--green-soft); flex-shrink: 0; }
+.ai-room-avatar svg { width: 24px; height: 24px; }
+.ai-room-intro p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.ai-room-intro .button { margin-left: auto; min-height: 38px; padding: 7px 12px; font-size: 13px; }
+.ai-room-note { line-height: 1.65; margin: 0; }
+.ai-room-history { min-height: 30dvh; }
+.conversation-content .message > p { white-space: pre-wrap; }
+.ai-room-items { display: grid; gap: 8px; margin-top: 9px; }
+.ai-room-item { display: flex; gap: 10px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 10px; text-decoration: none; color: inherit; }
+.ai-room-item > div { min-width: 0; }
+.ai-room-item strong { overflow-wrap: anywhere; }
+.ai-room-item p { margin: 4px 0; font-size: 13px; }
+.ai-room-item small { color: var(--muted); font-size: 11px; }
+.ai-room-item > svg { width: 18px; margin-left: auto; flex-shrink: 0; }
+.ai-room-item .trade-thumbnail { width: 52px; height: 52px; flex-shrink: 0; border-radius: 9px; object-fit: cover; }
+.ai-room-pending { font-size: 13px; color: var(--muted); margin: 0; }
+.ai-room-examples { display: flex; gap: 7px; flex-wrap: wrap; }
+.ai-room-examples button { border: 1px solid var(--line); border-radius: 16px; padding: 9px 12px; color: var(--green); background: white; text-align: left; font-size: 12px; }
+.conversation-content .compose :is(input, textarea) { box-sizing: border-box; min-width: 0; width: 100%; min-height: 46px; border: 1px solid var(--edge); border-radius: 16px; padding: 12px; font: inherit; background: #fff; }
+.ai-room-compose textarea { resize: vertical; max-height: 160px; }
+.ai-room-compose .button { align-self: end; }
+.ai-room-error { color: #8b3434; border: 1px solid #e4c5c5; border-radius: 12px; padding: 10px; }
+.ai-room-error p { margin: 0 0 8px; }

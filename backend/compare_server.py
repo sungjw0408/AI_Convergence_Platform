@@ -5,16 +5,38 @@ from threading import Lock
 
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import RequestEntityTooLarge
+from item_assistant import room_assist
 from photo_compare import compare, load_model, read_photo
 
 app = Flask(__name__, static_folder=str(Path(__file__).resolve().parents[1] / "frontend"), static_url_path="")
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 inference_lock = Lock()
+room_lock = Lock()
 
 
 @app.get("/")
 def home():
     return app.send_static_file("index.html")
+
+
+@app.post("/api/ai-room")
+def ai_room():
+    origin = request.headers.get("Origin")
+    if origin and origin != request.host_url.rstrip("/"):
+        return jsonify(error="같은 앱에서만 요청할 수 있어요."), 403
+    if not request.is_json or request.content_length is None or request.content_length > 160_000:
+        return jsonify(error="AI 요청 형식이나 크기를 확인해 주세요."), 400
+    if not room_lock.acquire(blocking=False):
+        return jsonify(error="AI가 처리 중이에요. 잠시 후 다시 보내 주세요."), 429
+    try:
+        return jsonify(room_assist(request.get_json(silent=True)))
+    except ValueError as error:
+        return jsonify(error=str(error)), 400
+    except RuntimeError as error:
+        app.logger.error("AI_ROOM: %s", error)
+        return jsonify(error=str(error)), 503
+    finally:
+        room_lock.release()
 
 
 @app.post("/api/photo-comparison")
