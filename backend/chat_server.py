@@ -1,4 +1,5 @@
 """Run: python backend/chat_server.py --port 8001 (standard library only)."""
+import os
 import argparse
 import json
 from functools import partial
@@ -19,7 +20,7 @@ class Handler(SimpleHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("JSON 요청만 지원해요.")
             origin = self.headers.get("Origin")
-            if origin and origin != "http://" + self.headers.get("Host", ""):
+            if origin and origin not in {"http://" + self.headers.get("Host", ""), "https://" + self.headers.get("Host", "")}:
                 self.reply(403, {"error": "같은 앱에서만 요청할 수 있어요."})
                 return
             count = int(self.headers.get("Content-Length", "0"))
@@ -52,10 +53,11 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8001")))
+    parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1] / "frontend"
     handler = partial(Handler, directory=str(root))
-    with ThreadingHTTPServer(("127.0.0.1", args.port), handler) as server:
-        print(f"이웃창고 + 채팅 AI: http://127.0.0.1:{args.port}", flush=True)
+    with ThreadingHTTPServer((args.host, args.port), handler) as server:
+        print(f"이웃창고 + 채팅 AI: http://{args.host}:{args.port}", flush=True)
         server.serve_forever()
