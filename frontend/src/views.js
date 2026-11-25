@@ -260,9 +260,9 @@ export function conversationPage(rental, item, messages, role) {
   </div>`;
 }
 
-export function profilePage(role, savedCount, listingCount) {
+export function profilePage(role, savedCount, listingCount, account = null) {
   return pageHeader("내 정보") + `<div class="content stack profile-content">
-    <div class="profile"><div class="avatar">${icon("user")}</div><div><p class="eyebrow">반가워요!</p><h2>${people[role].name}님</h2><p class="muted">${people[role].neighborhood} · 데모 프로필</p></div></div>
+    <div class="profile"><div class="avatar">${icon("user")}</div><div><p class="eyebrow">반가워요!</p><h2>${account ? "내 계정" : people[role].name + "님"}</h2><p class="muted">${account ? escape(account.email) : people[role].neighborhood + " · 데모 프로필"}</p></div></div>
     <div class="profile-stats"><a href="#saved"><strong>${savedCount}</strong><span>관심 물품</span></a><a href="#my-listings"><strong>${listingCount}</strong><span>등록한 물품</span></a><a href="#rentals">${icon("calendar")}<span>대여 내역</span></a></div>
     <section class="profile-section"><h2>나의 활동</h2><div class="menu-list">
       <a href="#rentals">${icon("calendar")}대여 내역${icon("right")}</a>
@@ -270,12 +270,15 @@ export function profilePage(role, savedCount, listingCount) {
       <a href="#my-listings">${icon("photo")}내가 올린 물품<span>${listingCount}개</span>${icon("right")}</a>
       <a href="#membership">${icon("sparkle")}구독 혜택${icon("right")}</a>
     </div></section>
-    <section class="stack compact profile-section demo-settings">
+    ${account ? `<form class="profile-section" data-form="logout">
+      <button class="button secondary" type="submit">로그아웃</button>
+      <p class="form-error" role="alert" hidden></p>
+    </form>` : `<section class="stack compact profile-section demo-settings">
       <h2>데모 프로필 전환</h2>
       <div class="segments">${Object.entries(people).map(([id, person]) => `
         <button data-action="role" data-id="${id}" aria-pressed="${role === id}">${person.name}</button>`).join("")}</div>
       <p class="hint">같은 브라우저에서 신청·승인·분쟁 검토를 시연할 수 있어요.</p>
-    </section>
+    </section>`}
   </div>`;
 }
 

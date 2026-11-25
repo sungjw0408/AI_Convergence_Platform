@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!backend/
+!backend/requirements-*.txt
+!backend/*.py
+!frontend/
+!frontend/index.html
+!frontend/styles.css
+!frontend/src/
+!frontend/src/**
+!frontend/assets/
+!frontend/assets/**

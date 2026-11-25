@@ -1,3 +1,5 @@
+import { accountPage, accountRequest } from "./accounts.js";
+import { connectRentalDatabase } from "./rental-database.js";
 import { newAIConversation, sendAIMessage } from "./ai-room.js";
 import { comparePhotos } from "./compare.js";
 import { openCapture } from "./capture.js";
@@ -7,7 +9,7 @@ import { completeDraft, currentResult, inspectionRecord, inspectionSources } fro
 import { inspectionPhotoDialog } from "./inspection-view.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import {
-  catalog, categories, findAvailability, localDay, neighborhoods, people, readState,
+  catalog, categories, findAvailability, initialState, localDay, neighborhoods, people, readState,
   rentalDays, suggestedFields, writeState,
 } from "./model.js?v=rento-home-5-ren";
 import {
@@ -20,7 +22,38 @@ const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
 const dialog = document.querySelector("#dialog");
 const toast = document.querySelector("#toast");
-const state = readState();
+const databaseMode = document.querySelector('meta[name="rento-database"]')?.content;
+const accountMode = databaseMode === "accounts";
+const preferencesKey = "rento-firestore-preferences-v1";
+const state = accountMode ? initialState() : readState(databaseMode ? preferencesKey : undefined);
+let account = null;
+let persistDatabase;
+
+function databaseError(error) {
+  if (dialog.open) dialog.close();
+  screen.replaceChildren();
+  navigation.replaceChildren();
+  const notice = document.createElement("p");
+  notice.className = "notice";
+  notice.setAttribute("role", "alert");
+  notice.textContent = error.message + " DB 내용을 다시 불러온 뒤 변경 사항을 확인해 주세요.";
+  const retry = document.createElement("button");
+  retry.className = "button secondary";
+  retry.textContent = "다시 불러오기";
+  retry.onclick = () => location.reload();
+  screen.append(notice, retry);
+}
+
+let databaseFailed = false;
+if (databaseMode) {
+  try {
+    if (accountMode) {
+      ({ account } = await accountRequest("session"));
+      if (account) state.role = account.uid;
+    }
+    if (!accountMode || account) persistDatabase = await connectRentalDatabase(state, account?.uid);
+  } catch (error) { databaseFailed = true; databaseError(error); }
+}
 const filters = { query: "", category: "전체", date: {}, maxPrice: null };
 let direction = state.role === "lender" ? "out" : "in";
 let toastTimeout;
@@ -54,7 +87,8 @@ async function analyzeTrade(rental, force = false) {
       if (latest.before[view.id]?.source !== before || latest.after[view.id]?.source !== after) { stale = true; continue; }
       if (rental.inspection) (latest.results ??= {})[view.id] = { ...result, beforeSource: before, afterSource: after };
       else rental.photoAnalysis = result;
-      save();
+      const saving = save();
+      if (saving && !await saving) return;
     } catch { progress.error = true; }
     progress.completed++;
     refresh();
@@ -65,11 +99,11 @@ async function analyzeTrade(rental, force = false) {
   if (stale && rental.status === "checking") analyzeTrade(rental);
 }
 
-const allItems = () => [...catalog, ...state.listings];
+const allItems = () => accountMode ? state.listings : [...catalog, ...state.listings];
 const itemById = (id) => allItems().find((item) => item.id === id);
 const rentalById = (id) => state.rentals.find((rental) => rental.id === id);
 const isParty = (rental) => rental && [rental.lenderId, rental.renterId].includes(state.role);
-const favoriteKey = (id) => state.role + "/" + id;
+const favoriteKey = (id) => accountMode ? id : state.role + "/" + id;
 const isFavorite = (id) => state.favorites.includes(favoriteKey(id));
 const newId = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
 const route = () => (location.hash.slice(1) || "home").split("/");
@@ -81,14 +115,26 @@ function showToast(message) {
   toastTimeout = setTimeout(() => { toast.hidden = true; }, 3200);
 }
 
+async function saveToDatabase() {
+  try { await persistDatabase(state); }
+  catch (error) {
+    databaseFailed = true;
+    databaseError(error);
+    return false;
+  }
+  if (accountMode) return true;
+  const { role, area, favorites } = state;
+  if (!writeState({ role, area, favorites }, preferencesKey)) showToast("화면 설정을 이 브라우저에 저장하지 못했어요.");
+  return true;
+}
+
 function save() {
-  const persisted = writeState(state);
-  if (!persisted) showToast("브라우저 저장 공간이 부족해요. 현재 화면에서 계속 이용할 수 있어요.");
-  return persisted;
+  if (databaseMode) return saveToDatabase();
+  if (!writeState(state)) showToast("브라우저 저장 공간이 부족해요. 현재 화면에서 계속 이용할 수 있어요.");
 }
 
 function announce(role, rental, message) {
-  state.notices.unshift({ role, rentalId: rental.id, message, read: false });
+  state.notices.unshift({ id: newId(), createdAt: Date.now(), role, rentalId: rental.id, message, read: false });
 }
 
 function availabilityLabel(item, filtered) {
@@ -120,7 +166,13 @@ function filteredListings() {
 const rowsFor = (items, filtered = false) => listingRows(items, isFavorite, (item) => availabilityLabel(item, filtered));
 
 function render() {
+  if (databaseFailed) return;
   const [page, id] = route();
+  if (accountMode && !account) {
+    navigation.replaceChildren();
+    screen.innerHTML = accountPage(page === "signup");
+    return;
+  }
   if (page === "compare") { location.replace("#rentals"); return; }
   if (page === "photo-evaluation") { location.replace("#dev/photo-evaluation"); return; }
   const role = state.role;
@@ -141,9 +193,9 @@ function render() {
     const rental = rentalById(id);
     if (isParty(rental) && chatAllowed(rental)) content = conversationPage(rental, itemById(rental.itemId), state.messages[id] ?? [], role);
   } else if (page === "profile") content = profilePage(role, allItems().filter((item) => isFavorite(item.id)).length,
-    allItems().filter((item) => item.owner === role).length);
-  else if (page === "dev" && id === "compare") content = comparePage(demo);
-  else if (page === "dev" && id === "photo-evaluation") content = evaluationPage(evaluation, pageHeader, escape);
+    allItems().filter((item) => item.owner === role).length, account);
+  else if (!accountMode && page === "dev" && id === "compare") content = comparePage(demo);
+  else if (!accountMode && page === "dev" && id === "photo-evaluation") content = evaluationPage(evaluation, pageHeader, escape);
   else if (page === "membership") content = membershipPage();
   else if (page === "saved" || page === "my-listings") {
     const items = allItems().filter((item) => page === "saved" ? isFavorite(item.id) : item.owner === role);
@@ -190,7 +242,7 @@ function formError(form, message) {
 
 const formErrorMarkup = '<p class="form-error" role="alert" hidden></p>';
 
-function tradeAction(action) {
+async function tradeAction(action) {
   const rental = rentalById(route()[1]);
   if (!rental) return;
   const owns = state.role === rental.lenderId;
@@ -202,9 +254,9 @@ function tradeAction(action) {
       showDialog("예약을 확정할 수 없어요", `<p class="notice">${escape(error)}</p>`);
       return;
     }
-    updateTrade(rental, "confirmed", rental.renterId, "대여 신청이 승인됐어요.");
+    await updateTrade(rental, "confirmed", rental.renterId, "대여 신청이 승인됐어요.");
   } else if (action === "reject" && owns && rental.status === "pending") {
-    updateTrade(rental, "rejected", rental.renterId, "대여 신청이 거절됐어요.");
+    await updateTrade(rental, "rejected", rental.renterId, "대여 신청이 거절됐어요.");
   } else if (action === "cancel" && ((borrows && rental.status === "pending")
       || ((owns || borrows) && rental.status === "confirmed"))) {
     showDialog("예약 취소", `<form data-form="cancel" data-id="${rental.id}" class="form-card plain">
@@ -213,13 +265,13 @@ function tradeAction(action) {
   } else if (action === "handoff" && owns && rental.status === "confirmed") {
     showDialog("대여 전 사진 촬영", evidenceForm("handoff", rental));
   } else if (action === "receive" && borrows && rental.status === "handover") {
-    updateTrade(rental, "active", rental.lenderId, "대여자가 물품 수령을 확인했어요.");
+    await updateTrade(rental, "active", rental.lenderId, "대여자가 물품 수령을 확인했어요.");
   } else if (action === "return" && borrows && rental.status === "active") {
     showDialog("반납 사진 촬영", evidenceForm("return", rental));
   } else if (action === "reshoot" && borrows && rental.status === "checking" && !comparisonFeedback.get(rental.id)?.busy) {
     showDialog("반납 사진 다시 촬영", evidenceForm("return-update", rental));
   } else if (action === "complete" && owns && rental.status === "checking") {
-    updateTrade(rental, "complete", rental.renterId, "공급자가 반납을 확인했어요.");
+    await updateTrade(rental, "complete", rental.renterId, "공급자가 반납을 확인했어요.");
   } else if (action === "dispute" && owns && rental.status === "checking") {
     showDialog("손상·누락 신고", noteForm("dispute", rental, "확인한 손상이나 누락 내용을 적어주세요.", "신고 접수"));
   } else if (action === "resolve" && state.role === "admin" && rental.status === "disputed") {
@@ -342,7 +394,7 @@ async function submitEvidence(form, rental, kind) {
   const recipient = kind === "handoff" ? rental.renterId : rental.lenderId;
   const message = kind === "handoff" ? "대여 전 상태 사진이 등록됐어요. 물품을 받으면 수령을 확인해 주세요."
     : kind === "return-update" ? "반납 상태 사진이 업데이트됐어요." : "반납 요청과 상태 사진이 도착했어요.";
-  updateTrade(rental, kind === "handoff" ? "handover" : "checking", recipient, message);
+  if (!await updateTrade(rental, kind === "handoff" ? "handover" : "checking", recipient, message)) return;
   for (const capture of Object.values(draft.photos)) if (capture.preview) URL.revokeObjectURL(capture.preview);
   evidenceDrafts.delete(`${rental.id}:${kind}`);
   if (kind !== "handoff") await analyzeTrade(rental);
@@ -360,18 +412,21 @@ async function runEvaluation() {
   finally { evaluation.busy = false; if (route()[0] === "dev" && route()[1] === "photo-evaluation") render(); }
 }
 
-function updateTrade(rental, status, recipient, message) {
+async function updateTrade(rental, status, recipient, message) {
   rental.status = status;
   if (recipient) announce(recipient, rental, message);
-  save();
+  const saving = save();
+  if (saving && !await saving) return;
   if (dialog.open) dialog.close();
   render();
+  return true;
 }
 
-function openNotices() {
+async function openNotices() {
   const notices = state.notices.filter((notice) => notice.role === state.role);
   for (const notice of notices) notice.read = true;
-  save();
+  const saving = save();
+  if (saving && !await saving) return;
   const indicator = screen.querySelector(".notification i");
   if (indicator) indicator.remove();
   showDialog("알림", notices.length ? `<div class="menu-list">${notices.map((notice) =>
@@ -419,7 +474,8 @@ document.addEventListener("keydown", event => {
   }
 });
 
-document.addEventListener("click", (event) => {
+document.addEventListener("click", async (event) => {
+  if (databaseFailed || (accountMode && !account)) return;
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const { action, id } = target.dataset;
@@ -482,7 +538,8 @@ document.addEventListener("click", (event) => {
   } else if (action === "favorite" && itemById(id)) {
     const selected = !isFavorite(id);
     state.favorites = selected ? [...state.favorites, favoriteKey(id)] : state.favorites.filter((key) => key !== favoriteKey(id));
-    save();
+    const saving = save();
+    if (saving && !await saving) return;
     if (route()[0] === "saved") render();
     else {
       target.classList.toggle("selected", selected);
@@ -493,21 +550,23 @@ document.addEventListener("click", (event) => {
       `<button data-action="set-area" data-id="${area}">${area}${area === state.area ? icon("check") : ""}</button>`).join("")}</div>`);
   } else if (action === "set-area" && neighborhoods.includes(id)) {
     state.area = id;
-    save();
+    const saving = save();
+    if (saving && !await saving) return;
     dialog.close();
     render();
-  } else if (action === "notices") openNotices();
-  else if (action === "role" && Object.hasOwn(people, id)) {
+  } else if (action === "notices") await openNotices();
+  else if (action === "role" && !accountMode && Object.hasOwn(people, id)) {
     state.role = id;
     direction = id === "lender" ? "out" : "in";
-    save();
+    const saving = save();
+    if (saving && !await saving) return;
     render();
-    screen.querySelector(`[data-action="role"][data-id="${id}"]`).focus();
+    screen.querySelector(`[data-action="role"][data-id="${id}"]`)?.focus();
   } else if (action === "direction") {
     direction = id;
     render();
     screen.querySelector(`[data-action="direction"][data-id="${id}"]`).focus();
-  } else if (action === "trade-action") tradeAction(id);
+  } else if (action === "trade-action") await tradeAction(id);
   else if (action === "draft") {
     const form = target.form;
     const title = form.elements.title.value.trim();
@@ -614,6 +673,19 @@ document.addEventListener("change", async ({ target }) => {
 async function submit(form) {
   const { form: kind, id } = form.dataset;
   const fields = new FormData(form);
+  if (accountMode && (kind === "login" || kind === "signup")) {
+    await accountRequest(kind, { email: fields.get("email"), password: fields.get("password") });
+    location.replace(location.pathname + "#home");
+    location.reload();
+    return;
+  }
+  if (accountMode && kind === "logout") {
+    await accountRequest("logout");
+    location.replace(location.pathname + "#login");
+    location.reload();
+    return;
+  }
+  if (accountMode && !account) return;
   const date = { start: fields.get("start"), end: fields.get("end") };
 
   if (kind === "compare-demo") {
@@ -663,11 +735,12 @@ async function submit(form) {
       formError(form, error || "승인 대기 중인 내 신청과 날짜가 겹쳐요. 거래 내역에서 기존 신청을 철회한 뒤 다시 신청해 주세요.");
       return;
     }
-    const rental = { id: newId(), itemId: id, renterId: state.role, lenderId: item.owner,
+    const rental = { id: newId(), createdAt: Date.now(), itemId: id, renterId: state.role, lenderId: item.owner,
       ...date, total: item.price * rentalDays(date.start, date.end), deposit: item.deposit ?? 0, status: "pending" };
     state.rentals.unshift(rental);
     announce(item.owner, rental, "새 대여 신청이 도착했어요.");
-    save();
+    const saving = save();
+    if (saving && !await saving) return;
     direction = "in";
     navigate(`#trade/${rental.id}`);
     return;
@@ -696,9 +769,10 @@ async function submit(form) {
     const role = state.role;
     const photo = await readPhoto(fields.get("photo"));
     if (role !== state.role || !form.isConnected) return;
-    state.listings.unshift({ id: newId(), title, description, price, deposit, owner: role, category,
+    state.listings.unshift({ id: newId(), createdAt: Date.now(), title, description, price, deposit, owner: role, category,
       neighborhood: area, image: photo, availableFrom: date.start, availableTo: date.end });
-    save();
+    const saving = save();
+    if (saving && !await saving) return;
     filters.query = "";
     filters.category = "전체";
     filters.date = {};
@@ -714,13 +788,14 @@ async function submit(form) {
   if (kind === "message" && (owns || borrows) && chatAllowed(rental)) {
     const message = fields.get("message").trim();
     if (!message || message.length > 350) return;
-    (state.messages[id] ??= []).push({ sender: state.role, text: message, sentAt: Date.now() });
-    save();
+    (state.messages[id] ??= []).push({ id: newId(), sender: state.role, text: message, sentAt: Date.now() });
+    const saving = save();
+    if (saving && !await saving) return;
     render();
-    document.querySelector(".compose input").focus();
+    document.querySelector(".compose input")?.focus();
   } else if (kind === "cancel" && ((borrows && rental.status === "pending")
       || ((owns || borrows) && rental.status === "confirmed"))) {
-    updateTrade(rental, "canceled", owns ? rental.renterId : rental.lenderId, "대여 신청이 취소됐어요.");
+    await updateTrade(rental, "canceled", owns ? rental.renterId : rental.lenderId, "대여 신청이 취소됐어요.");
   } else if (["handoff", "return", "return-update"].includes(kind) && canSubmitEvidence(kind, rental)) {
     await submitEvidence(form, rental, kind);
   } else if (["dispute", "resolve", "review"].includes(kind)) {
@@ -732,22 +807,23 @@ async function submit(form) {
     if (kind === "dispute" && owns && rental.status === "checking") {
       rental.dispute = note;
       rental.resolution = "";
-      announce("admin", rental, "새 분쟁이 접수됐어요.");
-      updateTrade(rental, "disputed", rental.renterId, "공급자가 반납 상태에 이의를 제기했어요.");
+      if (!accountMode) announce("admin", rental, "새 분쟁이 접수됐어요.");
+      await updateTrade(rental, "disputed", rental.renterId, "공급자가 반납 상태에 이의를 제기했어요.");
     } else if (kind === "resolve" && state.role === "admin" && rental.status === "disputed") {
       rental.resolution = note;
       announce(rental.lenderId, rental, "관리자 검토가 끝났어요. 반납 상태를 확인해 주세요.");
-      updateTrade(rental, "checking", rental.renterId, "관리자가 신고 내용을 검토했어요.");
+      await updateTrade(rental, "checking", rental.renterId, "관리자가 신고 내용을 검토했어요.");
     } else if (kind === "review" && borrows && rental.status === "complete" && !rental.review) {
       const rating = Number(fields.get("rating"));
       if (!Number.isInteger(rating) || rating < 1 || rating > 5) return;
       rental.review = { rating, text: note };
-      updateTrade(rental, "complete");
+      await updateTrade(rental, "complete");
     }
   }
 }
 
 document.addEventListener("submit", async (event) => {
+  if (databaseFailed) return;
   const form = event.target;
   if (!form.dataset.form) return;
   event.preventDefault();
@@ -777,6 +853,9 @@ window.addEventListener("hashchange", () => {
   window.scrollTo(0, 0);
   screen.focus({ preventScroll: true });
 });
+if (accountMode) {
+  window.addEventListener("pageshow", (event) => { if (event.persisted) location.reload(); });
+}
 render();
 
 if (photoStorageError) showToast(photoStorageError);
