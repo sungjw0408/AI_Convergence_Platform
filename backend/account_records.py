@@ -1,4 +1,5 @@
 """Access rules for Firestore records owned by Firebase Auth users."""
+from community_records import can_submit, feedback, now_ms, public_reviews, reputation, valid_use
 import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -62,7 +63,18 @@ def account_documents(root, uid, transaction):
         for doc in query(root, "rentals", field, "==", uid, transaction):
             rentals[doc.id] = doc.to_dict()
     profile = root.collection("profiles").document(uid).get(transaction=transaction).to_dict()
+    membership = root.collection("memberships").document(uid).get(transaction=transaction).to_dict()
+    summaries = reputation(doc.to_dict() for doc in query(root, "rentals", "status", "==", "complete", transaction))
+    for r in rentals.values():
+        side = "renter" if r["renterId"] == uid else "lender"
+        visible = dict(public_reviews(r, now_ms()))
+        if side in feedback(r):
+            visible[side] = feedback(r)[side]
+        if "feedback" in r:
+            r["feedback"] = visible
     return {
+        "memberships": [membership] if membership else [],
+        "publicReputation": summaries,
         "listings": [doc.to_dict() for doc in root.collection("listings").stream(transaction=transaction)],
         "rentals": list(rentals.values()),
         "messages": [doc.to_dict() for doc in query(root, "messages", "participantIds", "array_contains", uid, transaction)
@@ -202,11 +214,21 @@ def validate_rental(root, transaction, uid, record, current):
         elif status == "disputed":
             require(text(record.get("dispute"), 500, True) and record.get("resolution", "") == "")
             allowed.update(("dispute", "resolution"))
-    elif status == "complete" and uid == current["renterId"] and not current.get("review"):
-        review = record.get("review")
-        require(isinstance(review, dict) and integer(review.get("rating"), 5) and review["rating"] >= 1
-                and text(review.get("text"), 500, True))
-        allowed.add("review")
+        if status == "complete":
+            require(integer(record.get("completedAt"), 2**53-1))
+            record["completedAt"] = now_ms()
+            allowed.add("completedAt")
+    elif status == "complete":
+        side = "renter" if current["renterId"] == uid else "lender"
+        require(can_submit(current, side, now_ms()))
+        entries = record.get("feedback")
+        require(isinstance(entries, dict) and set(entries) <= {side, "renter", "lender"})
+        entry = entries.get(side)
+        require(isinstance(entry, dict) and set(entry) == {"rating","text"} and
+                integer(entry["rating"], 5) and entry["rating"] >= 1 and text(entry["text"],500,True))
+        record["feedback"] = {**current.get("feedback", {}), side: entry}
+        record["completedAt"] = current["completedAt"]
+        allowed.add("feedback")
     elif status == "checking":
         validate_inspection(record, "after")
         if uid == current["lenderId"]:
@@ -237,6 +259,8 @@ def authorize_updates(root, transaction, uid, updates):
             require(record_id == uid and set(record) == {"id", "area", "favorites"} and record.get("area") in AREAS)
             require(isinstance(favorites, list) and len(favorites) <= 500
                     and all(matches(IDS, item) for item in favorites))
+        elif name == "memberships":
+            require(valid_use(current, record, uid, root, transaction))
         elif name == "listings":
             validate_listing(record, uid, current)
         elif name == "rentals":
@@ -244,6 +268,10 @@ def authorize_updates(root, transaction, uid, updates):
         elif name == "messages":
             rental = root.collection("rentals").document(record["rentalId"]).get(transaction=transaction).to_dict()
             require(rental and uid in (rental["renterId"], rental["lenderId"]) and rental["status"] in CHAT_STATUSES)
+            if current:
+                require(current["sender"] != uid and not current.get("read") and record == {**current, "read": True})
+                result.append((name, record))
+                continue
             require(not current and record.get("sender") == uid and text(record.get("text"), 350, True))
             require(integer(record.get("sentAt"), 2**53 - 1))
             record = {key: record[key] for key in ("id", "rentalId", "sender", "text", "sentAt")}

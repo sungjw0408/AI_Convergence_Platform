@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from flask import abort, g, jsonify, request
 
-COLLECTIONS = ("listings", "rentals", "messages", "notices")
+COLLECTIONS = ("listings", "rentals", "messages", "notices", "memberships")
 DOCUMENT_ID = re.compile(r"[a-zA-Z0-9_-]{1,100}")
 # Firestore does not allow arrays inside arrays (e.g. LPIPS bounding boxes).
 STRUCTURED_FIELDS = ("inspection", "photoAnalysis")
@@ -73,8 +73,10 @@ def register_database(app, client=None, space=None, account_mode=False):
         ForbiddenRecord = PermissionError
 
     @firestore.transactional
-    def read(transaction, uid):
+    def read(transaction, uid, since):
         meta = root.get(transaction=transaction).to_dict() or {}
+        if since == meta.get("revision", 0):
+            return {"revision": since}
         records = {}
         if uid:
             records = account_documents(root, uid, transaction)
@@ -115,7 +117,7 @@ def register_database(app, client=None, space=None, account_mode=False):
             abort(403)
         try:
             if request.method == "GET":
-                response = jsonify(read(client.transaction(read_only=True), uid))
+                response = jsonify(read(client.transaction(read_only=True), uid, request.args.get("since", type=int)))
             else:
                 if not request.is_json:
                     abort(415)
