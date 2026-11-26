@@ -85,7 +85,7 @@ const storageKey = "neighbor-storage-demo-v1";
 
 export function initialState() {
   return {
-    role: "renter", area: "죽전동", favorites: [], listings: [], rentals: [], messages: {}, notices: [],
+    role: "renter", area: "죽전동", favorites: [], listings: [], rentals: [], messages: {}, notices: [], memberships: {},
   };
 }
 

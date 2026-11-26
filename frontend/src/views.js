@@ -162,6 +162,8 @@ function tradeButton(title, type, cls = "primary") {
 }
 
 
+import { canReview, publicFeedback, unread } from "./community.js";
+
 export function tradePage(rental, item, role, feedback, selectedView) {
   const owns = role === rental.lenderId;
   const borrows = role === rental.renterId;
@@ -175,7 +177,7 @@ export function tradePage(rental, item, role, feedback, selectedView) {
   else if (status === "checking" && borrows) actions = `<button class="button secondary" data-action="trade-action" data-id="reshoot" ${feedback?.busy ? "disabled" : ""}>반납 사진 다시 촬영</button>`;
   else if (status === "checking" && owns) actions = tradeButton("반납 확인 · 거래 완료", "complete") + tradeButton("손상·누락 신고", "dispute", "secondary");
   else if (status === "disputed" && role === "admin") actions = tradeButton("검토 후 반납 확인으로 돌리기", "resolve");
-  else if (status === "complete" && borrows && !rental.review) actions = tradeButton("별점·후기 작성", "review");
+  else if (canReview(rental, role)) actions = tradeButton("별점·후기 작성", "review");
 
   return pageHeader("대여 상세", "#rentals") + `<div class="content stack">
     <section class="trade-overview">
@@ -192,7 +194,9 @@ export function tradePage(rental, item, role, feedback, selectedView) {
       ? `<a class="button secondary" href="#chat/${rental.id}">${icon("chat")}거래 채팅</a>` : ""}
     ${inspectionCard(rental, item, feedback, selectedView, escape)}
     ${rental.dispute ? `<section class="notice"><strong>분쟁 기록</strong><p>${escape(rental.dispute)}</p>${rental.resolution ? `<p>검토 의견 · ${escape(rental.resolution)}</p>` : ""}</section>` : ""}
-    ${rental.review ? `<section class="notice"><strong>${"★".repeat(rental.review.rating)} · 후기</strong><p>${escape(rental.review.text)}</p></section>` : ""}
+    ${(owns || borrows) ? `<a href="#person/${escape(owns ? rental.renterId : rental.lenderId)}">상대방 프로필</a>` : ""}
+    ${Object.entries(publicFeedback(rental)).map(([side, review]) => `<section class="notice"><strong>${side === "renter" ? "대여자" : "공급자"}가 남긴 후기 · ${review.rating}점</strong><p>${escape(review.text)}</p></section>`).join("")}
+    ${status === "complete" && rental.completedAt && !Object.keys(publicFeedback(rental)).length ? '<p class="hint">후기는 양쪽 작성 또는 거래 완료 7일 후 공개돼요.</p>' : ""}
     ${actions ? `<div class="action-row">${actions}</div>` : ""}
   </div>`;
 }
@@ -214,7 +218,7 @@ export function chatPage(rentals, catalog, role, threads, canChat) {
       const time = messageDate(last);
       return `<a class="conversation-row" href="#chat/${escape(rental.id)}">
         <span class="avatar">${icon("user")}</span>
-        <div class="conversation-summary"><div class="conversation-heading"><strong>${escape(partnerName(rental, role))}</strong>${badge(rental.status)}</div>
+        <div class="conversation-summary"><div class="conversation-heading"><strong>${escape(partnerName(rental, role))}</strong>${badge(rental.status)} ${unread(threads[rental.id], role) ? `<b aria-label="안 읽은 메시지">${unread(threads[rental.id], role)}</b>` : ""}</div>
           <p>${escape(item.title)}</p><p>${last ? (last.sender === role ? "나: " : "") + escape(last.text) : "아직 메시지가 없어요."}</p>
           <small>${dates(rental.start, rental.end)}${time ? ` · <time datetime="${time.toISOString()}">${localDay(time) === localDay() ? chatClock.format(time) : chatDay.format(time)}</time>` : ""}</small></div>
         ${image(item, "chat-thumbnail", item.title)}
@@ -226,14 +230,14 @@ export function chatPage(rentals, catalog, role, threads, canChat) {
 export function conversationPage(rental, item, messages, role) {
   const partner = escape(partnerName(rental, role));
   let lastDay = null;
-  const bubbles = messages.map((message) => {
+  const bubbles = messages.map((message, index) => {
     const time = messageDate(message);
     const day = time ? localDay(time) : null;
     const divider = day && day !== lastDay
       ? `<div class="chat-day"><time datetime="${day}">${chatDay.format(time)}</time></div>` : "";
     lastDay = day;
     const mine = message.sender === role;
-    return divider + `<div class="message${mine ? " outgoing" : ""}">
+    return divider + `<div class="message${mine ? " outgoing" : ""}" data-message-index="${index}">
       <small>${mine ? "나" : partner}</small>
       <p>${escape(message.text)}</p>
       ${time ? `<time class="message-time" datetime="${time.toISOString()}">${chatClock.format(time)}</time>` : ""}
@@ -303,9 +307,9 @@ export function comparePage(demo) {
 
 export function membershipPage() {
   const benefits = [
-    ["photo", "월간 게시글 홍보권", "원하는 물품을 검색 결과의 광고 영역에 노출하는 공급자 혜택이에요."],
-    ["calendar", "예약 수수료 할인", "플랫폼 결제를 도입하면 대여자의 예약 수수료에 할인을 적용해요."],
-    ["pin", "반납 픽업", "서비스 가능 지역에서 월 1회, 대여자에게서 물품을 받아 공급자에게 돌려줘요."],
+    ["photo", "월간 게시글 홍보권", "등록한 물품의 홍보를 신청할 수 있어요. 노출 방식은 추후 확정돼요."],
+    ["calendar", "예약 수수료 할인", "예약 수수료 정책 확정 후 적용할 예정이에요."],
+    ["pin", "반납 픽업", "대여 중인 거래의 반납 픽업을 신청할 수 있어요. 운영 범위와 비용은 추후 확정돼요."],
   ];
   return pageHeader("구독 혜택", "#profile") + `<div class="content stack">
     ${benefits.map(([symbol, heading, detail]) => `<article class="benefit">${icon(symbol)}<div><h2>${heading}</h2><p>${detail}</p></div></article>`).join("")}
@@ -322,7 +326,7 @@ export function missingPage() {
 }
 
 
-export function aiRoomPage(session, itemById) {
+export function aiRoomPage(session, itemById, criteria = {date: {}}) {
   const suggestions = ["주말에 집에서 영화 보고 싶어요", "가구 조립에 쓸 공구가 필요해요", "하루 5천 원 이하로 추천해 주세요"];
   const bubbles = session.messages.map(message => {
     const mine = message.role === "user";
@@ -337,14 +341,18 @@ export function aiRoomPage(session, itemById) {
   return pageHeader("AI에게 물어보기", "#home") + `<div class="content stack conversation-content ai-room">
     <div class="ai-room-intro"><span class="ai-room-avatar">${icon("sparkle")}</span><div><strong>렌토 AI</strong><p>필요한 물건을 함께 찾아봐요.</p></div>
       <button type="button" class="button secondary" data-action="ai-new"${session.busy ? " disabled" : ""}>새 대화</button></div>
-    <p class="hint ai-room-note">이곳에 입력한 질문과 물품 목록을 로컬 AI가 참고해요. 이웃과 나눈 채팅은 전달하지 않아요. 답변은 참고용이며 예약은 직접 신청해 주세요.</p>
+    <p class="hint ai-room-note">이곳에 입력한 질문과 물품 목록을 AI가 참고해요. 이웃과 나눈 채팅은 전달하지 않아요. 답변은 참고용이며 예약은 직접 신청해 주세요.</p>
     <div class="messages chat-history ai-room-history" role="log" aria-label="AI와의 대화" tabindex="0">
       ${bubbles || `<article class="message"><small>렌토 AI</small><p>안녕하세요! 어떤 일에 쓸 물건을 찾고 계세요? 용도나 예산을 알려주시면 등록된 물품에서 찾아드릴게요.</p></article>`}
       ${session.busy ? `<article class="message outgoing"><small>나</small><p>${escape(session.pending)}</p></article><p class="ai-room-pending" role="status">렌토 AI가 답변을 준비하고 있어요…</p>` : ""}
     </div>
     ${!session.messages.length && !session.busy ? `<div class="ai-room-examples">${suggestions.map(text => `<button type="button" data-action="ai-example" data-text="${escape(text)}">${escape(text)}</button>`).join("")}</div>` : ""}
     ${session.error ? `<div class="ai-room-error" role="alert"><p>${escape(session.error)}</p><button type="button" class="button secondary" data-action="ai-retry">다시 보내기</button></div>` : ""}
-    <form class="compose ai-room-compose" data-form="ai-room">
+    <fieldset class="stack"><legend>추천 조건</legend><label>하루 최대 예산(원)<input type="number" name="budget" form="ai-compose" min="0" value="${criteria.maxPrice ?? ""}"></label>
+      ${dateInputs(criteria.date, {required:false}).replaceAll("<input ", '<input form="ai-compose" ')}
+    </fieldset>
+    <form id="ai-compose" class="compose ai-room-compose" data-form="ai-room">
+      <p class="form-error" role="alert" hidden></p>
       <label class="sr-only" for="ai-question">AI에게 보낼 질문</label>
       <textarea id="ai-question" name="question" rows="1" maxlength="500" placeholder="용도나 궁금한 점을 물어보세요" required${session.busy ? " disabled" : ""}>${escape(session.draft)}</textarea>
       <button type="submit" class="button primary"${session.busy ? " disabled" : ""}>${session.busy ? "답변 중" : "보내기"}</button>

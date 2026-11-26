@@ -2,6 +2,7 @@ const endpoint = "/api/rental-database";
 
 function documents(state, uid) {
   const records = {
+    memberships: Object.values(state.memberships || {}),
     listings: state.listings,
     rentals: state.rentals,
     messages: Object.entries(state.messages).flatMap(([rentalId, thread]) =>
@@ -20,21 +21,22 @@ function documentIndex(records) {
   return index;
 }
 
-async function request(uid, options) {
+async function request(uid, options, suffix = "") {
   const headers = new Headers(options?.headers);
   if (uid) headers.set("X-Rento-Account", uid);
-  const response = await fetch(endpoint, { cache: "no-store", signal: AbortSignal.timeout(15000), ...options, headers });
+  const response = await fetch(endpoint + suffix, { cache: "no-store", signal: AbortSignal.timeout(15000), ...options, headers });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "Firestore 요청을 완료하지 못했어요.");
   return result;
 }
 
-export async function connectRentalDatabase(state, uid) {
-  const snapshot = await request(uid);
+function applySnapshot(state, uid, snapshot) {
   const records = snapshot.records;
   for (const name of ["listings", "rentals", "notices"]) {
     state[name] = records[name].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
   }
+  state.memberships = Object.fromEntries((records.memberships || []).map(p => [p.id, p]));
+  state.publicReputation = records.publicReputation;
   state.messages = {};
   for (const record of records.messages.sort((a, b) => a.sentAt - b.sentAt || a.id.localeCompare(b.id))) {
     (state.messages[record.rentalId] ??= []).push(record);
@@ -44,10 +46,16 @@ export async function connectRentalDatabase(state, uid) {
     state.area = records.profiles[0].area;
     state.favorites = records.profiles[0].favorites;
   }
+}
+
+export async function connectRentalDatabase(state, uid) {
+  const snapshot = await request(uid);
+  applySnapshot(state, uid, snapshot);
+  let observed = snapshot.revision;
   let previous = documentIndex(documents(state, uid));
   let revision = snapshot.revision;
   let pending = Promise.resolve();
-  return function save(state) {
+  function save(state) {
     const records = documents(state, uid);
     const next = documentIndex(records);
     const changes = [];
@@ -68,4 +76,15 @@ export async function connectRentalDatabase(state, uid) {
     });
     return pending;
   };
+  save.refresh = async () => {
+    const queued = pending;
+    await queued;
+    const result = await request(uid, {}, "?since=" + observed);
+    if (!result.records || queued !== pending) return false;
+    applySnapshot(state, uid, result);
+    revision = observed = result.revision;
+    previous = documentIndex(documents(state, uid));
+    return true;
+  };
+  return save;
 }

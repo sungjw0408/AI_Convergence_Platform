@@ -21,6 +21,7 @@ import {
   rentalEstimate, rentalsPage, tradePage,
 } from "./views.js?v=rento-home-5-ren";
 
+import { canReview, reputation, seat, unread, quota, membershipPanel } from "./community.js";
 const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
 const dialog = document.querySelector("#dialog");
@@ -158,14 +159,14 @@ function availabilityLabel(item, filtered) {
   return "예약 중";
 }
 
-function filteredListings() {
-  const search = filters.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+function filteredListings(criteria = filters) {
+  const search = criteria.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   let items = allItems().filter((item) => {
     const text = [item.title, item.category, item.neighborhood, item.description].join(" ").toLowerCase();
-    return (filters.category === "전체" || item.category === filters.category)
+    return (criteria.category === "전체" || item.category === criteria.category)
       && search.every((term) => text.includes(term))
-      && (filters.maxPrice === null || item.price <= filters.maxPrice)
-      && (!filters.date.start || !findAvailability(item, filters.date.start, filters.date.end, state.rentals));
+      && (criteria.maxPrice === null || item.price <= criteria.maxPrice)
+      && (!criteria.date.start || !findAvailability(item, criteria.date.start, criteria.date.end, state.rentals));
   });
   if (state.area !== "죽전동") {
     items = items.sort((a, b) => Number(b.neighborhood === state.area) - Number(a.neighborhood === state.area));
@@ -191,7 +192,7 @@ function render() {
     area: state.area, ...filters, rows: rowsFor(filteredListings(), true),
     unread: state.notices.some((notice) => notice.role === role && !notice.read),
   });
-  else if (page === "assistant") content = aiRoomPage(assistantSession(), itemById);
+  else if (page === "assistant") content = aiRoomPage(assistantSession(), itemById, assistantSession().criteria ?? filters);
   else if (page === "item" && itemById(id)) content = itemPage(itemById(id), role, filters.date, gallerySelections.get(id));
   else if (page === "new") content = registerPage(role, state.area, listingDraft());
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
@@ -206,16 +207,24 @@ function render() {
     allItems().filter((item) => item.owner === role).length, account);
   else if (!accountMode && page === "dev" && id === "compare") content = comparePage(demo);
   else if (!accountMode && page === "dev" && id === "photo-evaluation") content = evaluationPage(evaluation, pageHeader, escape);
-  else if (page === "membership") content = membershipPage();
+  else if (page === "membership") content = membershipPage() + membershipPanel(role, state.memberships[role], allItems(), state.rentals, billingMonth(), escape, !accountMode);
   else if (page === "saved" || page === "my-listings") {
     const items = allItems().filter((item) => page === "saved" ? isFavorite(item.id) : item.owner === role);
     const title = page === "saved" ? "관심 물품" : "내가 올린 물품";
     content = pageHeader(title, "#profile") + `<div class="content">${items.length ? rowsFor(items)
       : `<p class="notice">${page === "saved" ? "아직 관심 물품이 없어요." : "아직 올린 물품이 없어요."}</p>`}</div>`;
   }
+  if ((page === "profile" || page === "person") && (page === "profile" || id)) {
+    const uid = page === "profile" ? role : id;
+    const stats = state.publicReputation?.[uid] ?? reputation(state.rentals, uid);
+    const mean = stats.reviews.length ? (stats.reviews.reduce((n,r) => n+r.rating,0)/stats.reviews.length).toFixed(1) + "점" : "평가 전";
+    content = (page === "profile" ? content : pageHeader("상대방 프로필", "#rentals")) +
+      `<section class="content stack"><h2>거래 평판</h2><p>평균 별점 ${mean} · 후기 ${stats.reviews.length}개 · 완료 거래 ${stats.completed}건</p>${stats.reviews.map(r=>`<p>${r.rating}점 · ${escape(r.text)}</p>`).join("")}</section>`;
+  }
   screen.innerHTML = content ?? missingPage();
   const history = screen.querySelector(".chat-history");
   if (history) history.scrollTop = history.scrollHeight;
+  observeMessages();
   const aiHistory = screen.querySelector(".ai-room-history");
   if (aiHistory) aiHistory.scrollTop = aiHistory.scrollHeight;
 
@@ -224,8 +233,60 @@ function render() {
     ["home", "home", "홈"], ["rentals", "calendar", role === "admin" ? "분쟁 검토" : "내 대여"],
     ["chat", "chat", "채팅"], ["profile", "user", "내 정보"],
   ];
+  const totalUnread = state.rentals.filter(r => isParty(r) && chatAllowed(r)).reduce((n, r) => n + unread(state.messages[r.id], role), 0);
   navigation.innerHTML = tabs.map(([target, symbol, label]) =>
-    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}>${icon(symbol)}<span>${label}</span></a>`).join("");
+    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}>${icon(symbol)}<span>${label}${target === "chat" && totalUnread ? ` <b aria-label="안 읽은 메시지">${totalUnread}</b>` : ""}</span></a>`).join("");
+}
+
+let messageObserver;
+function observeMessages() {
+  messageObserver?.disconnect();
+  const [page,id] = route(), role = state.role;
+  const history = screen.querySelector(".chat-history");
+  if (page !== "chat" || !id || !history || document.hidden || dialog.open || !globalThis.IntersectionObserver) return;
+  const thread = state.messages[id] || [];
+  messageObserver = new IntersectionObserver(entries => {
+    if (document.hidden || dialog.open || route()[0] !== "chat" || route()[1] !== id || state.role !== role) return;
+    let changed = false;
+    for (const entry of entries) {
+      const msg = thread[Number(entry.target.dataset.messageIndex)];
+      if (entry.target.isConnected && entry.isIntersecting && entry.intersectionRatio > 0 && msg && msg.sender !== role && !msg.read) {
+        msg.read = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      save();
+      const count = state.rentals.filter(r => isParty(r) && chatAllowed(r)).reduce((n,r) => n + unread(state.messages[r.id],role),0);
+      const label = navigation.querySelector('a[href="#chat"] span');
+      if (label) label.textContent = count ? "채팅 " + count : "채팅";
+    }
+  }, {threshold: [0, 0.01]});
+  history.querySelectorAll("[data-message-index]").forEach(el => messageObserver.observe(el));
+}
+document.addEventListener("visibilitychange", observeMessages);
+dialog.addEventListener("close", observeMessages);
+
+function billingMonth() {
+  return new Date(Date.now() + 9 * 3600000).toISOString().slice(0,7);
+}
+
+async function benefitAction(action, id) {
+  const uid = state.role, month = billingMonth();
+  const plan = state.memberships[uid] || {id: uid, active: false, grants: {}, actions: []};
+  if (action === "demo-subscription" && !accountMode) plan.active = !plan.active;
+  else if (action === "demo-grant" && !accountMode && plan.active) {
+    (plan.grants ??= {})[month] = (plan.grants[month] || 0) + 1;
+  } else {
+    if (!plan.active || (plan.actions || []).some(a => a.type === action && a.target === id && (action === "pickup" || a.month === month))) return;
+    if (action === "promote" && (!(quota(plan,month) > 0) || itemById(id)?.owner !== uid)) return;
+    if (action === "pickup" && (rentalById(id)?.renterId !== uid || rentalById(id)?.status !== "active")) return;
+    if (!["promote","pickup"].includes(action)) return;
+    (plan.actions ??= []).push({type: action, target: id, month});
+  }
+  state.memberships[uid] = plan;
+  const saving = save();
+  if (!saving || await saving) render();
 }
 
 function chatAllowed(rental) {
@@ -286,7 +347,7 @@ async function tradeAction(action) {
     showDialog("손상·누락 신고", noteForm("dispute", rental, "확인한 손상이나 누락 내용을 적어주세요.", "신고 접수"));
   } else if (action === "resolve" && state.role === "admin" && rental.status === "disputed") {
     showDialog("관리자 검토", noteForm("resolve", rental, "검토 의견을 적어주세요.", "검토 완료"));
-  } else if (action === "review" && borrows && rental.status === "complete" && !rental.review) {
+  } else if (action === "review" && canReview(rental, state.role)) {
     showDialog("별점·후기 작성", noteForm("review", rental, "대여 경험을 적어주세요.", "후기 등록",
       '<label>별점<select name="rating"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select></label>'));
   }
@@ -494,6 +555,7 @@ async function runEvaluation() {
 }
 
 async function updateTrade(rental, status, recipient, message) {
+  if (status === "complete" && rental.status !== status) rental.completedAt = Date.now();
   rental.status = status;
   if (recipient) announce(recipient, rental, message);
   const saving = save();
@@ -526,17 +588,20 @@ function assistantSession(role = state.role) {
 }
 
 function assistantItems() {
-  return allItems().filter(item => item.owner !== state.role).map(item => ({
+  const criteria = assistantSession().criteria ?? filters;
+  return filteredListings(criteria).filter(item => item.owner !== state.role).map(item => ({
     id: item.id, title: item.title, category: item.category, neighborhood: item.neighborhood,
     price: item.price, description: item.description ?? "",
-    availability: availabilityLabel(item, false),
+    availability: criteria.date.start ? "선택한 기간 대여 가능" : availabilityLabel(item, false),
   }));
 }
 
 async function sendAssistant() {
   const role = state.role, session = assistantSession(role);
   if (session.busy) return;
-  const request = sendAIMessage(session, assistantItems(), localDay());
+  const items = assistantItems();
+  if (!items.length) { session.error = "조건에 맞는 물품이 없어요. 날짜나 예산을 조정해 주세요."; render(); return; }
+  const request = sendAIMessage(session, items, localDay());
   render();
   await request;
   if (route()[0] === "assistant" && state.role === role) {
@@ -560,6 +625,9 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const { action, id } = target.dataset;
+  if (["demo-subscription","demo-grant","promote","pickup"].includes(action)) {
+    await benefitAction(action,id); return;
+  }
   if (action.startsWith("listing-")) {
     if (["listing-gallery", "listing-photo-enlarge"].includes(action)) {
       const item = itemById(route()[1]);
@@ -861,6 +929,10 @@ async function submit(form) {
 
   if (kind === "ai-room") {
     assistantSession().draft = fields.get("question") ?? "";
+    if ((date.start || date.end) && (!date.start || !date.end || date.start < localDay() || date.end < date.start)) {
+      formError(form, "대여 시작일과 종료일을 확인해 주세요."); return;
+    }
+    assistantSession().criteria = {...filters, date, maxPrice: fields.get("budget") ? Number(fields.get("budget")) : null};
     await sendAssistant();
     return;
   }
@@ -1005,11 +1077,11 @@ async function submit(form) {
       rental.resolution = note;
       announce(rental.lenderId, rental, "관리자 검토가 끝났어요. 반납 상태를 확인해 주세요.");
       await updateTrade(rental, "checking", rental.renterId, "관리자가 신고 내용을 검토했어요.");
-    } else if (kind === "review" && borrows && rental.status === "complete" && !rental.review) {
+    } else if (kind === "review" && canReview(rental, state.role)) {
       const rating = Number(fields.get("rating"));
       if (!Number.isInteger(rating) || rating < 1 || rating > 5) return;
-      rental.review = { rating, text: note };
-      await updateTrade(rental, "complete");
+      (rental.feedback ??= {})[seat(rental, state.role)] = { rating, text: note };
+      if (await updateTrade(rental, "complete") && accountMode) location.reload();
     }
   }
 }
@@ -1050,4 +1122,33 @@ if (accountMode) {
 }
 render();
 
+if (persistDatabase) {
+  let refreshing = false;
+  setInterval(async () => {
+    if (refreshing || databaseFailed || document.hidden || dialog.open) return;
+    refreshing = true;
+    try {
+      const previousIds = new Set(Object.values(state.messages).flat().map(m => m.id));
+      if (!await persistDatabase.refresh()) return;
+      const arrived = Object.values(state.messages).flat().some(m => !previousIds.has(m.id) && m.sender !== state.role && !m.read);
+      if (arrived) showToast("새 채팅 메시지가 도착했어요.");
+      const [page] = route();
+      if (["chat", "profile", "person", "membership"].includes(page) && !dialog.open) {
+        const input = screen.querySelector('[name="message"]');
+        const draft = input?.value, focused = input && document.activeElement === input;
+        const history = screen.querySelector(".chat-history");
+        const scroll = history && history.scrollHeight - history.scrollTop - history.clientHeight > 4 ? history.scrollTop : null;
+        render();
+        const updated = screen.querySelector('[name="message"]');
+        if (updated && draft !== undefined) { updated.value = draft; if (focused) updated.focus({preventScroll:true}); }
+        if (scroll !== null && screen.querySelector(".chat-history")) screen.querySelector(".chat-history").scrollTop = scroll;
+      } else {
+        const count = state.rentals.filter(r => isParty(r) && chatAllowed(r)).reduce((n,r) => n + unread(state.messages[r.id],state.role),0);
+        const label = navigation.querySelector('a[href="#chat"] span');
+        if (label) label.textContent = count ? "채팅 " + count : "채팅";
+      }
+    } catch { /* Connection can recover on the next foreground refresh. */ }
+    finally { refreshing = false; }
+  }, 5000);
+}
 if (photoStorageError) showToast(photoStorageError);
