@@ -3,6 +3,7 @@ import json
 import os
 import re
 from local_llm import generate
+from openai_chat import generate as generate_openai
 
 SYSTEM = """너는 물품 대여 서비스 렌토의 AI 상담 도우미다. 한국어 존댓말로 간결하게 대화하라.
 사용자의 용도·예산·선호를 이전 대화와 함께 이해하고 물품을 추천하거나 추가 질문을 하라.
@@ -67,6 +68,9 @@ def validate_room(data):
 def room_assist(data):
     messages, items, today = validate_room(data)
     model = os.environ.get("CHAT_AI_MODEL", "").strip()
+    use_openai = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    if use_openai:
+        model = os.environ.get("OPENAI_MODEL", "").strip() or "gpt-4.1-mini"
     if not model:
         raise RuntimeError("로컬 AI 모델이 설정되지 않았어요. CHAT_AI_MODEL을 확인해 주세요.")
     schema = {"type": "object", "additionalProperties": False,
@@ -85,7 +89,7 @@ def room_assist(data):
                          *messages],
             "options": {"temperature": 0.2, "num_predict": 800,
                         "num_ctx": 8192 if len(json.dumps(data, ensure_ascii=False)) < 3500 else 16384}}
-    raw = generate(body)
+    raw = generate_openai(body) if use_openai else generate(body)
     try:
         result = json.loads(raw)
         if not isinstance(result, dict) or set(result) != {"reply", "item_ids"}:
