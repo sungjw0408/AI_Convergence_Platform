@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: rento-ai-chat
+    runtime: python
+    plan: free
+    buildCommand: python -m compileall -q backend
+    startCommand: python backend/chat_server.py --host 0.0.0.0
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
