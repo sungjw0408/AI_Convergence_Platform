@@ -30,6 +30,7 @@ export async function sendAIMessage(session, items, today, request = askAI) {
     const allowed = new Set(items.map(item => item.id));
     const ids = result.item_ids;
     if (typeof result.text !== "string" || !result.text.trim() || !Array.isArray(ids)
+        || /\bitem_ids?\s*\[/i.test(result.text) || ids.length > 3
         || ids.some(id => typeof id !== "string" || !allowed.has(id))) throw new Error("AI 물품 정보를 확인할 수 없어요. 다시 보내 주세요.");
     session.messages.push({role: "user", text}, {role: "assistant", text: result.text, itemIds: [...new Set(ids)]});
     session.model = result.model;

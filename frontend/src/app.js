@@ -592,7 +592,7 @@ function assistantItems() {
   return filteredListings(criteria).filter(item => item.owner !== state.role).map(item => ({
     id: item.id, title: item.title, category: item.category, neighborhood: item.neighborhood,
     price: item.price, description: item.description ?? "",
-    availability: criteria.date.start ? "선택한 기간 대여 가능" : availabilityLabel(item, false),
+    availability: criteria.date.start ? criteria.date.start + " ~ " + criteria.date.end + " 대여 가능" : availabilityLabel(item, false),
   }));
 }
 
@@ -1133,7 +1133,7 @@ if (persistDatabase) {
       const arrived = Object.values(state.messages).flat().some(m => !previousIds.has(m.id) && m.sender !== state.role && !m.read);
       if (arrived) showToast("새 채팅 메시지가 도착했어요.");
       const [page] = route();
-      if (["chat", "profile", "person", "membership"].includes(page) && !dialog.open) {
+      if (["chat", "profile", "person", "membership", "trade"].includes(page) && !dialog.open) {
         const input = screen.querySelector('[name="message"]');
         const draft = input?.value, focused = input && document.activeElement === input;
         const history = screen.querySelector(".chat-history");

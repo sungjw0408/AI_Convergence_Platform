@@ -51,6 +51,7 @@ function applySnapshot(state, uid, snapshot) {
 export async function connectRentalDatabase(state, uid) {
   const snapshot = await request(uid);
   applySnapshot(state, uid, snapshot);
+  let lastFullRead = Date.now();
   let observed = snapshot.revision;
   let previous = documentIndex(documents(state, uid));
   let revision = snapshot.revision;
@@ -79,9 +80,12 @@ export async function connectRentalDatabase(state, uid) {
   save.refresh = async () => {
     const queued = pending;
     await queued;
-    const result = await request(uid, {}, "?since=" + observed);
+    // A blind review can become public even when nobody writes to the database.
+    const refreshExpiry = uid && Date.now() - lastFullRead >= 60000;
+    const result = await request(uid, {}, refreshExpiry ? "" : "?since=" + observed);
     if (!result.records || queued !== pending) return false;
     applySnapshot(state, uid, result);
+    lastFullRead = Date.now();
     revision = observed = result.revision;
     previous = documentIndex(documents(state, uid));
     return true;
