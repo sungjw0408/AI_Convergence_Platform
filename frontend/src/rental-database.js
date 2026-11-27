@@ -20,9 +20,10 @@ function documentIndex(records) {
   return index;
 }
 
-async function request(uid, options) {
+async function request(uid, options, actor) {
   const headers = new Headers(options?.headers);
   if (uid) headers.set("X-Rento-Account", uid);
+  else if (actor) headers.set("X-Rento-Demo-Actor", actor);
   const response = await fetch(endpoint, { cache: "no-store", signal: AbortSignal.timeout(15000), ...options, headers });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "Firestore 요청을 완료하지 못했어요.");
@@ -30,9 +31,16 @@ async function request(uid, options) {
 }
 
 export async function connectRentalDatabase(state, uid) {
-  const snapshot = await request(uid);
+  const snapshot = await request(uid, undefined, state.role);
   const records = snapshot.records;
   for (const name of ["listings", "rentals", "notices"]) {
+    const existing = new Map((state[name] || []).map(record => [record.id, record]));
+    records[name] = records[name].map(record => {
+      const current = existing.get(record.id);
+      if (!current) return record;
+      for (const key of Object.keys(current)) if (!(key in record)) delete current[key];
+      return Object.assign(current, record);
+    });
     state[name] = records[name].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
   }
   state.messages = {};
@@ -60,10 +68,11 @@ export async function connectRentalDatabase(state, uid) {
     if (!changes.length) return pending;
     // Snapshot now: subsequent edits must not change a queued transaction's payload.
     const payload = structuredClone(changes);
+    const actor = state.role;
     previous = next;
     pending = pending.then(async () => {
       const result = await request(uid, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ revision, changes: payload }) });
+        body: JSON.stringify({ revision, changes: payload }) }, actor);
       revision = result.revision;
     });
     return pending;

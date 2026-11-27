@@ -1,3 +1,4 @@
+import { sendRentalCommand, commandForm } from "./rental-lifecycle.js?v=team2-compact-4";
 import { accountPage, accountRequest } from "./accounts.js";
 import { connectRentalDatabase } from "./rental-database.js";
 import { newAIConversation, sendAIMessage } from "./ai-room.js";
@@ -19,7 +20,7 @@ import {
   aiRoomPage, chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalEstimate, rentalsPage, tradePage,
-} from "./views.js?v=rento-home-5-ren";
+} from "./views.js?v=rento-team2-2";
 
 const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
@@ -27,6 +28,8 @@ const dialog = document.querySelector("#dialog");
 const toast = document.querySelector("#toast");
 const databaseMode = document.querySelector('meta[name="rento-database"]')?.content;
 const accountMode = databaseMode === "accounts";
+const lifecycleEnabled = document.querySelector('meta[name="rento-lifecycle"]')?.content === "enabled";
+let lifecycleBusy = false;
 const preferencesKey = "rento-firestore-preferences-v1";
 const state = accountMode ? initialState() : readState(databaseMode ? preferencesKey : undefined);
 let account = null;
@@ -197,7 +200,7 @@ function render() {
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
   else if (page === "trade") {
     const rental = rentalById(id);
-    if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id), inspectionViews.get(id));
+    if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id), inspectionViews.get(id), lifecycleEnabled);
   } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role, state.messages, chatAllowed);
   else if (page === "chat") {
     const rental = rentalById(id);
@@ -252,12 +255,41 @@ function formError(form, message) {
 
 const formErrorMarkup = '<p class="form-error" role="alert" hidden></p>';
 
+async function runLifecycle(action, data) {
+  if (!lifecycleEnabled) throw new Error("거래 서버를 실행해 주세요: python backend/lifecycle_server.py --port 8003");
+  if (lifecycleBusy) throw new Error("거래를 처리 중이에요. 잠시 후 다시 시도해 주세요.");
+  lifecycleBusy = true;
+  try {
+    const rental = await sendRentalCommand(action, data, state.role, accountMode);
+    persistDatabase = await connectRentalDatabase(state, account?.uid);
+    if (dialog.open) dialog.close();
+    render();
+    if (action.startsWith("pay") && data.outcome === "failure") {
+      showDialog("테스트 결제 실패", '<p class="notice" role="alert">테스트 결제에 실패했어요. 실제 청구는 없으며, 결제 기한 안에 다시 시도해 주세요.</p><button class="button primary" data-action="close">확인</button>');
+    } else if (action === "amount_objection" || action === "return_objection") {
+      showToast("이의가 접수됐어요. 거래·결제 내역에서 내용과 처리 상태를 확인해 주세요.");
+    }
+    return rental;
+  } catch (error) {
+    try { persistDatabase = await connectRentalDatabase(state, account?.uid); } catch {}
+    throw error;
+  } finally { lifecycleBusy = false; }
+}
+
 async function tradeAction(action) {
   const rental = rentalById(route()[1]);
   if (!rental) return;
   const owns = state.role === rental.lenderId;
   const borrows = state.role === rental.renterId;
+  if (lifecycleEnabled && rental.lifecycleVersion !== 1) {
+    showToast("기존 시연 거래는 조회만 가능해요. 날짜·시각을 지정해 새로 신청해 주세요."); return;
+  }
   const tradeItem = itemById(rental.itemId);
+  if (rental.lifecycleVersion === 1 && ["confirm", "reject", "receive", "complete"].includes(action)) {
+    try { await runLifecycle(({confirm: "approve", reject: "reject", receive: "receive", complete: "complete"})[action], {rentalId: rental.id}); }
+    catch (error) { showToast(error.message); }
+    return;
+  }
   if (action === "confirm" && owns && rental.status === "pending") {
     const error = findAvailability(tradeItem, rental.start, rental.end, state.rentals, rental.id);
     if (error) {
@@ -268,7 +300,7 @@ async function tradeAction(action) {
   } else if (action === "reject" && owns && rental.status === "pending") {
     await updateTrade(rental, "rejected", rental.renterId, "대여 신청이 거절됐어요.");
   } else if (action === "cancel" && ((borrows && rental.status === "pending")
-      || ((owns || borrows) && rental.status === "confirmed"))) {
+      || ((owns || borrows) && ["payment_pending", "confirmed", "handover"].includes(rental.status)))) {
     showDialog("예약 취소", `<form data-form="cancel" data-id="${rental.id}" class="form-card plain">
       <p>이 대여 신청을 취소하시겠어요?</p><button class="button primary" type="submit">취소 확정</button>
     </form>`);
@@ -494,6 +526,11 @@ async function runEvaluation() {
 }
 
 async function updateTrade(rental, status, recipient, message) {
+  if (rental.lifecycleVersion === 1 && status !== "complete") {
+    const action = status === "handover" ? "handoff" : rental.status === "active" ? "return" : "reshoot";
+    await runLifecycle(action, { rentalId: rental.id, inspection: rental.inspection });
+    return true;
+  }
   rental.status = status;
   if (recipient) announce(recipient, rental, message);
   const saving = save();
@@ -625,7 +662,10 @@ document.addEventListener("click", async (event) => {
     const link = document.createElement("a"); link.href = url; link.download = "photo-evaluation.json"; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000); return;
   }
-  if (action === "close") dialog.close();
+  if (action === "lifecycle") {
+    const rental = rentalById(route()[1]);
+    if (rental?.lifecycleVersion === 1) showDialog("거래 처리", commandForm(id, rental, escape, value => new Intl.NumberFormat("ko-KR").format(value) + "원"));
+  } else if (action === "close") dialog.close();
   else if (action === "category" && categories.includes(id)) {
     filters.category = id;
     screen.querySelectorAll(".chip").forEach((chip) => chip.setAttribute("aria-pressed", String(chip === target)));
@@ -868,19 +908,11 @@ async function submit(form) {
   if (kind === "request") {
     const item = itemById(id);
     if (!item || item.owner === state.role || state.role === "admin") return;
-    const error = findAvailability(item, date.start, date.end, state.rentals);
-    const same = state.rentals.some((rental) => rental.status === "pending" && rental.itemId === id
-      && rental.renterId === state.role && rental.start <= date.end && date.start <= rental.end);
-    if (error || same) {
-      formError(form, error || "승인 대기 중인 내 신청과 날짜가 겹쳐요. 거래 내역에서 기존 신청을 철회한 뒤 다시 신청해 주세요.");
-      return;
+    const startAt = new Date(date.start), endAt = new Date(date.end);
+    if (!Number.isFinite(startAt.getTime()) || !Number.isFinite(endAt.getTime()) || endAt <= startAt) {
+      formError(form, "시작·반납 날짜와 시각을 확인해 주세요."); return;
     }
-    const rental = { id: newId(), createdAt: Date.now(), itemId: id, renterId: state.role, lenderId: item.owner,
-      ...date, total: item.price * rentalDays(date.start, date.end), deposit: item.deposit ?? 0, status: "pending" };
-    state.rentals.unshift(rental);
-    announce(item.owner, rental, "새 대여 신청이 도착했어요.");
-    const saving = save();
-    if (saving && !await saving) return;
+    const rental = await runLifecycle("request", {itemId: id, startAt: startAt.toISOString(), endAt: endAt.toISOString(), timeZone: fields.get("timeZone")});
     direction = "in";
     navigate(`#trade/${rental.id}`);
     return;
@@ -977,6 +1009,17 @@ async function submit(form) {
   if (!rental) return;
   const owns = state.role === rental.lenderId;
   const borrows = state.role === rental.renterId;
+  if (kind === "lifecycle" && rental.lifecycleVersion === 1) {
+    const data = Object.fromEntries(fields);
+    data.rentalId = id;
+    for (const key of ["endAt", "appointmentAt", "returnedAt"]) if (data[key]) data[key] = new Date(data[key]).toISOString();
+    for (const key of ["amount", "repairCost"]) if (key in data) data[key] = Number(data[key]);
+    for (const key of ["consent", "noTimeChangeAgreed"]) if (key in data) data[key] = data[key] === "on";
+    await runLifecycle(form.dataset.command, data);
+    return;
+  }
+  if (rental.lifecycleVersion === 1 && kind === "cancel") { await runLifecycle("cancel", {rentalId: id}); return; }
+  if (rental.lifecycleVersion === 1 && kind === "dispute") { await runLifecycle("dispute", {rentalId: id, note: fields.get("note")}); return; }
   if (kind === "message" && (owns || borrows) && chatAllowed(rental)) {
     const message = fields.get("message").trim();
     if (!message || message.length > 350) return;
@@ -986,7 +1029,7 @@ async function submit(form) {
     render();
     document.querySelector(".compose input")?.focus();
   } else if (kind === "cancel" && ((borrows && rental.status === "pending")
-      || ((owns || borrows) && rental.status === "confirmed"))) {
+      || ((owns || borrows) && ["payment_pending", "confirmed", "handover"].includes(rental.status)))) {
     await updateTrade(rental, "canceled", owns ? rental.renterId : rental.lenderId, "대여 신청이 취소됐어요.");
   } else if (["handoff", "return", "return-update"].includes(kind) && canSubmitEvidence(kind, rental)) {
     await submitEvidence(form, rental, kind);
@@ -1051,3 +1094,17 @@ if (accountMode) {
 render();
 
 if (photoStorageError) showToast(photoStorageError);
+
+if (lifecycleEnabled) {
+  setInterval(async () => {
+    if (databaseFailed || lifecycleBusy || dialog.open || document.hidden || !["rentals", "trade"].includes(route()[0])) return;
+    lifecycleBusy = true;
+    try {
+      const before = JSON.stringify([state.rentals, state.notices]);
+      persistDatabase = await connectRentalDatabase(state, account?.uid);
+      if (before !== JSON.stringify([state.rentals, state.notices])) render();
+    }
+    catch (error) { showToast(error.message); }
+    finally { lifecycleBusy = false; }
+  }, 10000);
+}

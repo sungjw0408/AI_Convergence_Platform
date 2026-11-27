@@ -171,6 +171,10 @@ def validate_inspection(record, field):
 
 
 def validate_rental(root, transaction, uid, record, current):
+    if current and current.get("lifecycleVersion") == 1:
+        # Command-only state machine: never accept a client-provided payment/state change.
+        allowed = {"inspection", "photoAnalysis", "review"}
+        require(all(record.get(k) == current.get(k) for k in record.keys() | current.keys() if k not in allowed))
     require(matches(IDS, record.get("itemId")))
     if not current:
         require(set(record) == RENTAL_KEYS | {"status"} and record.get("status") == "pending" and record.get("renterId") == uid)
