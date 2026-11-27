@@ -1,4 +1,4 @@
-export const week = 7 * 86400000;
+﻿export const week = 7 * 86400000;
 export function feedback(rental) {
   return {...(rental.review ? {renter: rental.review} : {}), ...rental.feedback};
 }
@@ -30,7 +30,7 @@ export function quota(plan, month) {
   if (!Number.isInteger(granted) || granted < 0) return null;
   return Math.max(0, granted - (plan.actions || []).filter(a => a.type === "promote" && a.month === month).length);
 }
-export function feeDiscountEligible(plan) { return plan?.active === true; }
+
 export function membershipPanel(uid, plan, listings, rentals, month, escape, demo) {
   const active = plan?.active === true;
   const balance = quota(plan, month);

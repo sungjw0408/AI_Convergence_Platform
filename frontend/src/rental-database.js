@@ -2,7 +2,8 @@ const endpoint = "/api/rental-database";
 
 function documents(state, uid) {
   const records = {
-    memberships: Object.values(state.memberships || {}),
+  inquiries: state.inquiries ?? [],
+  memberships: Object.values(state.memberships || {}),
     listings: state.listings,
     rentals: state.rentals,
     messages: Object.entries(state.messages).flatMap(([rentalId, thread]) =>
@@ -31,6 +32,7 @@ async function request(uid, options, suffix = "") {
 }
 
 function applySnapshot(state, uid, snapshot) {
+  state.inquiries = records.inquiries ?? [];
   const records = snapshot.records;
   for (const name of ["listings", "rentals", "notices"]) {
     state[name] = records[name].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));

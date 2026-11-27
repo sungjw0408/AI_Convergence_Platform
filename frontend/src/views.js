@@ -1,4 +1,4 @@
-import { comparisonResult } from "./compare.js";
+﻿import { comparisonResult } from "./compare.js";
 import { inspectionCard } from "./inspection-view.js";
 import { photoUrl } from "./photo-store.js";
 import { itemGallery } from "./listing-photo-view.js";
@@ -34,24 +34,81 @@ function image(item, classes = "", label = "") {
 }
 
 export function listingRows(items, isFavorite, availability) {
-  if (!items.length) return empty("조건에 맞는 물품이 없어요", "다른 검색어나 대여 날짜로 찾아보세요.");
+  if (!items.length) {
+    return empty(
+      "조건에 맞는 물품이 없어요",
+      "다른 검색어나 대여 날짜로 찾아보세요."
+    );
+  }
+
   return items.map((item) => {
     const selected = isFavorite(item.id);
     const status = availability(item);
-    return `<article class="listing">
-      <a class="listing-link" href="#item/${item.id}">
-        ${image(item, "listing-photo", item.title)}
-        <div class="listing-info">
-          <h3>${escape(item.title)}</h3>
-          <p class="location">${escape(item.neighborhood)}${item.distance ? ` · ${escape(item.distance)}` : ""}</p>
-          <div class="listing-bottom">
-            <strong class="rate">${won(item.price)} <span>/ 일</span></strong>
-            <span class="availability${status === "예약 중" ? " unavailable" : ""}">${status}</span>
-          </div>
+
+    return `
+      <article class="listing-with-owner">
+
+        <div class="listing">
+          <a class="listing-link" href="#item/${escape(item.id)}">
+
+            ${image(item, "listing-photo", item.title)}
+
+            <div class="listing-info">
+              <h3>${escape(item.title)}</h3>
+
+              <p class="location">
+                ${escape(item.neighborhood)}
+                ${item.distance ? ` · ${escape(item.distance)}` : ""}
+              </p>
+
+              <div class="listing-bottom">
+                <strong class="rate">
+                  ${won(item.price)} <span>/ 일</span>
+                </strong>
+
+                <span class="availability${status === "예약 중" ? " unavailable" : ""}">
+                  ${escape(status)}
+                </span>
+              </div>
+            </div>
+          </a>
+
+          <button
+            class="icon-button favorite${selected ? " selected" : ""}"
+            data-action="favorite"
+            data-id="${escape(item.id)}"
+            aria-pressed="${selected}"
+            aria-label="${escape(item.title)} 관심 물품">
+            ${icon("heart")}
+          </button>
         </div>
-      </a>
-      <button class="icon-button favorite${selected ? " selected" : ""}" data-action="favorite" data-id="${item.id}" aria-pressed="${selected}" aria-label="${escape(item.title)} 관심 물품">${icon("heart")}</button>
-    </article>`;
+
+        <a class="listing-owner"
+           href="#person/${encodeURIComponent(item.owner)}">
+
+          <span class="owner-avatar">
+            <svg width="22" height="22"
+                 viewBox="0 0 24 24"
+                 fill="none"
+                 stroke="currentColor"
+                 stroke-width="1.8"
+                 stroke-linecap="round">
+              <circle cx="12" cy="8" r="4"/>
+              <path d="M4 21v-2a8 8 0 0 1 16 0v2"/>
+            </svg>
+          </span>
+
+          <span class="owner-info">
+            <strong>
+              ${escape(people[item.owner]?.name ?? "공급자 프로필")}
+            </strong>
+            <small>프로필 및 거래 후기 보기</small>
+          </span>
+
+          <span class="owner-arrow">›</span>
+        </a>
+
+      </article>`;
   }).join("");
 }
 
@@ -208,51 +265,264 @@ const chatClock = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2
 const messageDate = (message) => Number.isFinite(message?.sentAt)
   && Number.isFinite(new Date(message.sentAt).getTime()) ? new Date(message.sentAt) : null;
 
-export function chatPage(rentals, catalog, role, threads, canChat) {
-  const conversations = rentals.filter((rental) => (rental.renterId === role || rental.lenderId === role)
-    && canChat(rental)).map((rental) => ({ rental, last: threads[rental.id]?.at(-1) }))
-    .sort((a, b) => (messageDate(b.last)?.getTime() ?? 0) - (messageDate(a.last)?.getTime() ?? 0));
-  return pageHeader("채팅") + `<div class="content chat-list"><p class="page-description">이웃과 나누는 대화, 더 편안한 거래</p>${conversations.length
-    ? conversations.map(({ rental, last }) => {
-      const item = catalog(rental.itemId);
-      const time = messageDate(last);
-      return `<a class="conversation-row" href="#chat/${escape(rental.id)}">
+export function chatPage(rentals, catalog, role, threads, canChat, inquiries = []) {
+  const conversations = [
+    ...rentals
+      .filter(r => (r.renterId === role || r.lenderId === role) && canChat(r))
+      .map(r => ({
+        id: r.id,
+        rental: r,
+        last: threads[r.id]?.at(-1),
+        createdAt: r.createdAt ?? 0
+      })),
+    ...inquiries
+      .filter(room => room.participants.includes(role))
+      .map(room => ({
+        id: room.id,
+        room,
+        last: threads[room.id]?.at(-1),
+        createdAt: room.createdAt ?? 0
+      }))
+  ].sort((a, b) =>
+    (b.last?.sentAt ?? b.createdAt) -
+    (a.last?.sentAt ?? a.createdAt)
+  );
+
+  return pageHeader("채팅") + `
+    <div class="content chat-list">
+      <p class="page-description chat-description">
+        이웃과 나누는 대화, 더 편안한 거래
+      </p>
+
+      ${conversations.length
+        ? conversations.map(({id, rental, room, last}) => {
+          const item = rental ? catalog(rental.itemId) : null;
+
+          const partnerId = room
+            ? room.participants.find(p => p !== role)
+            : rental.renterId === role
+              ? rental.lenderId
+              : rental.renterId;
+
+          const partner = people[partnerId]?.name ?? "이웃";
+          const count = unread(threads[id], role);
+          const time = messageDate(last);
+
+          return `
+            <a class="conversation-row" href="#chat/${escape(id)}">
+              <span class="avatar">${icon("user")}</span>
+
+              <div class="conversation-summary">
+                <div class="conversation-heading">
+                  <strong>${escape(partner)}</strong>
+
+                  ${rental
+                    ? badge(rental.status)
+                    : '<span class="availability">문의 채팅</span>'}
+
+                  ${count
+                    ? `<b class="room-unread" aria-label="안 읽은 메시지 ${count}개">${count > 99 ? "99+" : count}</b>`
+                    : ""}
+                </div>
+
+                <p>${item ? escape(item.title) : "대여 전 문의"}</p>
+
+                <p>${last
+                  ? (last.sender === role ? "나: " : "") + escape(last.text)
+                  : "아직 메시지가 없어요."}</p>
+
+                <small>
+                  ${rental ? dates(rental.start, rental.end) : ""}
+                  ${time
+                    ? `<time datetime="${time.toISOString()}">
+                        ${localDay(time) === localDay()
+                          ? chatClock.format(time)
+                          : chatDay.format(time)}
+                       </time>`
+                    : ""}
+                </small>
+              </div>
+
+              ${item
+                ? image(item, "chat-thumbnail", item.title)
+                : icon("right")}
+            </a>`;
+        }).join("")
+        : `<div class="empty-icon">${icon("chat")}</div>
+           ${empty("아직 대화가 없어요", "공급자 프로필에서 대화를 시작해 보세요.")}
+           <a class="button secondary empty-action" href="#home">
+             빌릴 물품 둘러보기
+           </a>`}
+    </div>`;
+}
+
+export function inquiryPage(room, messages, role) {
+  const partnerId = room.participants.find(p => p !== role);
+  const partner = escape(people[partnerId]?.name ?? "이웃");
+
+  let lastDay = null;
+
+  const bubbles = messages.map((message, index) => {
+    const time = messageDate(message);
+    const day = time ? localDay(time) : null;
+
+    const divider = day && day !== lastDay
+      ? `<div class="chat-day">
+           <time datetime="${day}">${chatDay.format(time)}</time>
+         </div>`
+      : "";
+
+    lastDay = day;
+
+    const mine = message.sender === role;
+
+    return divider + `
+      <div class="message${mine ? " outgoing" : ""}"
+           data-message-index="${index}">
+        <small>${mine ? "나" : partner}</small>
+        <p>${escape(message.text)}</p>
+
+        ${time ? `
+          <time class="message-time" datetime="${time.toISOString()}">
+            ${chatClock.format(time)}
+          </time>` : ""}
+      </div>`;
+  }).join("");
+
+  return pageHeader(partner, "#chat") + `
+    <div class="content stack conversation-content">
+
+      <a class="conversation-item"
+         href="#person/${encodeURIComponent(partnerId)}">
+
         <span class="avatar">${icon("user")}</span>
-        <div class="conversation-summary"><div class="conversation-heading"><strong>${escape(partnerName(rental, role))}</strong>${badge(rental.status)} ${unread(threads[rental.id], role) ? `<b aria-label="안 읽은 메시지">${unread(threads[rental.id], role)}</b>` : ""}</div>
-          <p>${escape(item.title)}</p><p>${last ? (last.sender === role ? "나: " : "") + escape(last.text) : "아직 메시지가 없어요."}</p>
-          <small>${dates(rental.start, rental.end)}${time ? ` · <time datetime="${time.toISOString()}">${localDay(time) === localDay() ? chatClock.format(time) : chatDay.format(time)}</time>` : ""}</small></div>
-        ${image(item, "chat-thumbnail", item.title)}
-      </a>`;
-    }).join("")
-    : `<div class="empty-icon">${icon("chat")}</div>${empty("아직 대화가 없어요", "예약이 확정되면 상대와 인도 장소를 조율할 수 있어요.")}<a class="button secondary empty-action" href="#home">빌릴 물품 둘러보기</a>`}</div>`;
+
+        <div>
+          <strong>${partner}</strong>
+          <p>상대방 프로필 보기</p>
+        </div>
+
+        ${icon("right")}
+      </a>
+
+      <div class="messages chat-history"
+           role="log"
+           aria-label="대화 내역"
+           tabindex="0">
+
+        ${bubbles || empty(
+          "첫 메시지를 보내보세요",
+          "예약 전에 궁금한 점을 물어보세요."
+        )}
+      </div>
+
+      <form class="compose"
+            data-form="inquiry-message"
+            data-id="${escape(room.id)}">
+
+        <input name="message"
+               maxlength="350"
+               aria-label="메시지"
+               placeholder="메시지를 입력하세요"
+               autocomplete="off"
+               required>
+
+        <button type="submit"
+                class="button primary chat-send"
+                aria-label="메시지 전송">
+
+          <svg width="24"
+               height="24"
+               viewBox="0 0 24 24"
+               fill="none"
+               stroke="currentColor"
+               stroke-width="2.5"
+               stroke-linecap="round"
+               stroke-linejoin="round">
+            <path d="M12 19V5M5 12l7-7 7 7"/>
+          </svg>
+
+        </button>
+      </form>
+    </div>`;
 }
 
 export function conversationPage(rental, item, messages, role) {
   const partner = escape(partnerName(rental, role));
   let lastDay = null;
+
   const bubbles = messages.map((message, index) => {
     const time = messageDate(message);
     const day = time ? localDay(time) : null;
+
     const divider = day && day !== lastDay
-      ? `<div class="chat-day"><time datetime="${day}">${chatDay.format(time)}</time></div>` : "";
+      ? `<div class="chat-day">
+          <time datetime="${day}">${chatDay.format(time)}</time>
+        </div>`
+      : "";
+
     lastDay = day;
     const mine = message.sender === role;
-    return divider + `<div class="message${mine ? " outgoing" : ""}" data-message-index="${index}">
-      <small>${mine ? "나" : partner}</small>
-      <p>${escape(message.text)}</p>
-      ${time ? `<time class="message-time" datetime="${time.toISOString()}">${chatClock.format(time)}</time>` : ""}
-    </div>`;
+
+    return divider + `
+      <div class="message${mine ? " outgoing" : ""}" data-message-index="${index}">
+        <small>${mine ? "나" : partner}</small>
+        <p>${escape(message.text)}</p>
+        ${time ? `
+          <time class="message-time" datetime="${time.toISOString()}">
+            ${chatClock.format(time)}
+          </time>` : ""}
+      </div>`;
   }).join("");
-  return pageHeader(escape(item.title), "#chat") + `<div class="content stack conversation-content">
-    <a class="conversation-item" href="#trade/${escape(rental.id)}">${image(item, "trade-thumbnail", item.title)}<div><strong>${escape(item.title)}</strong><p>${won(item.price)} <span>/ 일</span></p></div>${icon("right")}</a>
-    <p class="conversation-notice">${icon("check")}약속한 시간과 장소를 함께 확인해 주세요.</p>
-    <div class="messages chat-history" role="log" aria-label="대화 내역" tabindex="0">${bubbles
-      || empty("첫 메시지를 보내보세요", "인도 시간과 만날 장소를 정해보세요.")}</div>
-    <form class="compose" data-form="message" data-id="${escape(rental.id)}">
-      <input name="message" maxlength="350" aria-label="메시지" placeholder="이웃에게 메시지를 보내보세요" required>
-      <button type="submit" class="button primary">보내기</button>
-    </form>
-  </div>`;
+
+  return pageHeader(escape(item.title), "#chat") + `
+    <div class="content stack conversation-content">
+
+      <a class="conversation-item" href="#trade/${escape(rental.id)}">
+        ${image(item, "trade-thumbnail", item.title)}
+        <div>
+          <strong>${escape(item.title)}</strong>
+          <p>${won(item.price)} <span>/ 일</span></p>
+        </div>
+        ${icon("right")}
+      </a>
+
+      <div class="messages chat-history"
+           role="log"
+           aria-label="대화 내역"
+           tabindex="0">
+        ${bubbles || empty("첫 메시지를 보내보세요", "이웃과 대화를 시작해 보세요.")}
+      </div>
+
+      <form class="compose"
+            data-form="message"
+            data-id="${escape(rental.id)}">
+
+        <input name="message"
+               maxlength="350"
+               aria-label="메시지"
+               placeholder="메시지를 입력하세요"
+               autocomplete="off"
+               required>
+
+        <button type="submit"
+                class="button primary chat-send"
+                aria-label="메시지 전송">
+
+          <svg width="24"
+               height="24"
+               viewBox="0 0 24 24"
+               fill="none"
+               stroke="currentColor"
+               stroke-width="2.5"
+               stroke-linecap="round"
+               stroke-linejoin="round">
+            <path d="M12 19V5M5 12l7-7 7 7"/>
+          </svg>
+
+        </button>
+      </form>
+    </div>`;
 }
 
 export function profilePage(role, savedCount, listingCount, account = null) {
@@ -308,12 +578,12 @@ export function comparePage(demo) {
 export function membershipPage() {
   const benefits = [
     ["photo", "월간 게시글 홍보권", "등록한 물품의 홍보를 신청할 수 있어요. 노출 방식은 추후 확정돼요."],
-    ["calendar", "예약 수수료 할인", "예약 수수료 정책 확정 후 적용할 예정이에요."],
+
     ["pin", "반납 픽업", "대여 중인 거래의 반납 픽업을 신청할 수 있어요. 운영 범위와 비용은 추후 확정돼요."],
   ];
   return pageHeader("구독 혜택", "#profile") + `<div class="content stack">
     ${benefits.map(([symbol, heading, detail]) => `<article class="benefit">${icon(symbol)}<div><h2>${heading}</h2><p>${detail}</p></div></article>`).join("")}
-    <p class="notice">구독료·홍보 횟수·수수료 할인율·픽업 가능 지역은 추후 확정돼요.</p>
+    <p class="notice">구독료·홍보 횟수·픽업 가능 지역은 추후 확정돼요.</p>
   </div>`;
 }
 
@@ -326,36 +596,157 @@ export function missingPage() {
 }
 
 
-export function aiRoomPage(session, itemById, criteria = {date: {}}) {
-  const suggestions = ["주말에 집에서 영화 보고 싶어요", "가구 조립에 쓸 공구가 필요해요", "하루 5천 원 이하로 추천해 주세요"];
+export function aiRoomPage(session, itemById) {
+  const suggestions = [
+    "주말에 집에서 영화 보고 싶어요",
+    "가구 조립에 쓸 공구가 필요해요",
+    "하루 5천 원 이하로 추천해 주세요"
+  ];
+
   const bubbles = session.messages.map(message => {
     const mine = message.role === "user";
-    const items = (message.itemIds ?? []).map(itemById).filter(Boolean);
-    return `<article class="message${mine ? " outgoing" : ""}">
-      <small>${mine ? "나" : "렌토 AI"}</small>
-      <p>${escape(message.text)}</p>
-      ${items.length ? `<div class="ai-room-items">${items.map(item => `<a class="ai-room-item" href="#item/${escape(item.id)}">
-        ${image(item, "trade-thumbnail", item.title)}<div><strong>${escape(item.title)}</strong><p>${won(item.price)} / 일 · ${escape(item.neighborhood)}</p><small>상세에서 대여 날짜와 조건 확인</small></div>${icon("right")}</a>`).join("")}</div>` : ""}
-    </article>`;
+    const items = (message.itemIds ?? [])
+      .map(itemById)
+      .filter(Boolean);
+
+    return `
+      <article class="message${mine ? " outgoing" : ""}">
+        <small>${mine ? "나" : "렌토 AI"}</small>
+        <p>${escape(message.text)}</p>
+
+        ${items.length ? `
+          <div class="ai-room-items">
+            ${items.map(item => `
+              <a class="ai-room-item"
+                 href="#item/${escape(item.id)}">
+
+                ${image(item, "trade-thumbnail", item.title)}
+
+                <div>
+                  <strong>${escape(item.title)}</strong>
+                  <p>${won(item.price)} / 일</p>
+                  <small>${escape(item.neighborhood)}</small>
+                </div>
+
+                ${icon("right")}
+              </a>
+            `).join("")}
+          </div>
+        ` : ""}
+      </article>
+    `;
   }).join("");
-  return pageHeader("AI에게 물어보기", "#home") + `<div class="content stack conversation-content ai-room">
-    <div class="ai-room-intro"><span class="ai-room-avatar">${icon("sparkle")}</span><div><strong>렌토 AI</strong><p>필요한 물건을 함께 찾아봐요.</p></div>
-      <button type="button" class="button secondary" data-action="ai-new"${session.busy ? " disabled" : ""}>새 대화</button></div>
-    <div class="messages chat-history ai-room-history" role="log" aria-label="AI와의 대화" tabindex="0">
-      ${bubbles || `<article class="message"><small>렌토 AI</small><p>안녕하세요! 어떤 일에 쓸 물건을 찾고 계세요? 용도나 예산을 알려주시면 등록된 물품에서 찾아드릴게요.</p></article>`}
-      ${session.busy ? `<article class="message outgoing"><small>나</small><p>${escape(session.pending)}</p></article><p class="ai-room-pending" role="status">렌토 AI가 답변을 준비하고 있어요…</p>` : ""}
+
+  return pageHeader("AI에게 물어보기", "#home") + `
+    <div class="content stack conversation-content ai-room">
+
+      <div class="ai-room-intro">
+        <span class="ai-room-avatar">
+          ${icon("sparkle")}
+        </span>
+
+        <div>
+          <strong>렌토 AI</strong>
+          <p>나에게 맞는 물품 찾기</p>
+        </div>
+
+        <button type="button"
+                class="ai-new-button"
+                data-action="ai-new"
+                aria-label="새 대화"
+                ${session.busy ? "disabled" : ""}>
+          ${icon("plus")}
+        </button>
+      </div>
+
+      <div class="messages chat-history ai-room-history"
+           role="log"
+           aria-label="AI와의 대화"
+           tabindex="0">
+
+        ${bubbles || `
+          <article class="message">
+            <small>렌토 AI</small>
+            <p>안녕하세요! 어떤 물품을 찾고 계세요?
+            용도와 예산을 알려주시면 필요한 물품을
+            추천해 드릴게요.</p>
+          </article>
+        `}
+
+        ${session.busy ? `
+          <article class="message outgoing">
+            <small>나</small>
+            <p>${escape(session.pending)}</p>
+          </article>
+
+          <div class="ai-typing" role="status"
+               aria-label="AI 답변 준비 중">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        ` : ""}
+      </div>
+
+      ${!session.messages.length && !session.busy ? `
+        <div class="ai-room-examples">
+          ${suggestions.map(text => `
+            <button type="button"
+                    data-action="ai-example"
+                    data-text="${escape(text)}">
+              ${escape(text)}
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
+
+      ${session.error ? `
+        <div class="ai-room-error" role="alert">
+          <p>${escape(session.error)}</p>
+          <button type="button"
+                  class="button secondary"
+                  data-action="ai-retry">
+            다시 보내기
+          </button>
+        </div>
+      ` : ""}
+
+      <form id="ai-compose"
+            class="compose ai-room-compose"
+            data-form="ai-room">
+
+        <p class="form-error" role="alert" hidden></p>
+
+        <label class="sr-only" for="ai-question">
+          AI에게 보낼 질문
+        </label>
+
+        <textarea id="ai-question"
+                  name="question"
+                  rows="1"
+                  maxlength="500"
+                  placeholder="어떤 물품이 필요하신가요?"
+                  required
+                  ${session.busy ? "disabled" : ""}>${escape(session.draft)}</textarea>
+
+        <button type="submit"
+                class="chat-send-button"
+                aria-label="메시지 보내기"
+                ${session.busy ? "disabled" : ""}>
+          <svg width="22" height="22"
+               viewBox="0 0 24 24"
+               fill="none"
+               stroke="currentColor"
+               stroke-width="2.2"
+               stroke-linecap="round"
+               stroke-linejoin="round"
+               aria-hidden="true">
+            <path d="M12 19V5"/>
+            <path d="m5 12 7-7 7 7"/>
+          </svg>
+        </button>
+
+      </form>
     </div>
-    ${!session.messages.length && !session.busy ? `<div class="ai-room-examples">${suggestions.map(text => `<button type="button" data-action="ai-example" data-text="${escape(text)}">${escape(text)}</button>`).join("")}</div>` : ""}
-    ${session.error ? `<div class="ai-room-error" role="alert"><p>${escape(session.error)}</p><button type="button" class="button secondary" data-action="ai-retry">다시 보내기</button></div>` : ""}
-    <fieldset class="stack"><legend>추천 조건</legend><label>하루 최대 예산(원)<input type="number" name="budget" form="ai-compose" min="0" value="${criteria.maxPrice ?? ""}"></label>
-      ${dateInputs(criteria.date, {required:false}).replaceAll("<input ", '<input form="ai-compose" ')}
-    </fieldset>
-    <form id="ai-compose" class="compose ai-room-compose" data-form="ai-room">
-      <p class="form-error" role="alert" hidden></p>
-      <label class="sr-only" for="ai-question">AI에게 보낼 질문</label>
-      <textarea id="ai-question" name="question" rows="1" maxlength="500" placeholder="용도나 궁금한 점을 물어보세요" required${session.busy ? " disabled" : ""}>${escape(session.draft)}</textarea>
-      <button type="submit" class="button primary"${session.busy ? " disabled" : ""}>${session.busy ? "답변 중" : "보내기"}</button>
-    </form>
-    <p class="hint">Enter로 전송 · Shift+Enter로 줄바꿈 · 대화는 현재 탭에서만 유지돼요.</p>
-  </div>`;
+  `;
 }

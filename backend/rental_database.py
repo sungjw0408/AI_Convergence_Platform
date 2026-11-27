@@ -6,7 +6,14 @@ from urllib.parse import urlsplit
 
 from flask import abort, g, jsonify, request
 
-COLLECTIONS = ("listings", "rentals", "messages", "notices", "memberships")
+COLLECTIONS = (
+    "listings",
+    "rentals",
+    "messages",
+    "notices",
+    "memberships",
+    "inquiries",
+)
 DOCUMENT_ID = re.compile(r"[a-zA-Z0-9_-]{1,100}")
 # Firestore does not allow arrays inside arrays (e.g. LPIPS bounding boxes).
 STRUCTURED_FIELDS = ("inspection", "photoAnalysis")

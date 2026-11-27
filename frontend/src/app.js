@@ -16,12 +16,18 @@ import {
   rentalDays, suggestedFields, writeState,
 } from "./model.js?v=rento-home-5-ren";
 import {
-  aiRoomPage, chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
+  aiRoomPage, chatPage, comparePage, conversationPage, inquiryPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalEstimate, rentalsPage, tradePage,
 } from "./views.js?v=rento-home-5-ren";
 
 import { canReview, reputation, seat, unread, quota, membershipPanel } from "./community.js";
+import {
+  findInquiry,
+  createInquiry,
+  inquiryPartner,
+  isInquiryParty
+} from "./inquiry.js";
 const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
 const dialog = document.querySelector("#dialog");
@@ -113,6 +119,56 @@ async function analyzeTrade(rental, force = false) {
 const allItems = () => accountMode ? state.listings : [...catalog, ...state.listings];
 const itemById = (id) => allItems().find((item) => item.id === id);
 const rentalById = (id) => state.rentals.find((rental) => rental.id === id);
+
+state.inquiries ??= [];
+
+const inquiryById = (id) =>
+  state.inquiries.find(room => room.id === id);
+
+function totalChatUnread(role = state.role) {
+  const rentalCount = state.rentals
+    .filter(r => isParty(r) && chatAllowed(r))
+    .reduce((n, r) => n + unread(state.messages[r.id], role), 0);
+
+  const inquiryCount = state.inquiries
+    .filter(room => isInquiryParty(room, role))
+    .reduce((n, room) => n + unread(state.messages[room.id], role), 0);
+
+  return rentalCount + inquiryCount;
+}
+
+let openingInquiry = false;
+
+async function startInquiry(partnerId) {
+  const role = state.role;
+
+  if (openingInquiry || !partnerId ||
+      partnerId === role || role === "admin") return;
+
+  openingInquiry = true;
+
+  try {
+    let room = findInquiry(state.inquiries, role, partnerId);
+
+    if (!room) {
+      if (!allItems().some(item => item.owner === partnerId)) {
+        showToast("등록된 물품이 없는 상대예요.");
+        return;
+      }
+
+      room = createInquiry(state.inquiries, role, partnerId);
+
+      const saving = save();
+      if (saving && !await saving) return;
+    }
+
+    if (state.role === role) {
+      navigate(`#chat/${room.id}`);
+    }
+  } finally {
+    openingInquiry = false;
+  }
+}
 const isParty = (rental) => rental && [rental.lenderId, rental.renterId].includes(state.role);
 const favoriteKey = (id) => accountMode ? id : state.role + "/" + id;
 const isFavorite = (id) => state.favorites.includes(favoriteKey(id));
@@ -199,10 +255,33 @@ function render() {
   else if (page === "trade") {
     const rental = rentalById(id);
     if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id), inspectionViews.get(id));
-  } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role, state.messages, chatAllowed);
-  else if (page === "chat") {
+  } else if (page === "chat" && !id) {
+    content = chatPage(
+      state.rentals,
+      itemById,
+      role,
+      state.messages,
+      chatAllowed,
+      state.inquiries
+    );
+  } else if (page === "chat") {
+    const room = inquiryById(id);
     const rental = rentalById(id);
-    if (isParty(rental) && chatAllowed(rental)) content = conversationPage(rental, itemById(rental.itemId), state.messages[id] ?? [], role);
+
+    if (room && isInquiryParty(room, role)) {
+      content = inquiryPage(
+        room,
+        state.messages[id] ?? [],
+        role
+      );
+    } else if (isParty(rental) && chatAllowed(rental)) {
+      content = conversationPage(
+        rental,
+        itemById(rental.itemId),
+        state.messages[id] ?? [],
+        role
+      );
+    }
   } else if (page === "profile") content = profilePage(role, allItems().filter((item) => isFavorite(item.id)).length,
     allItems().filter((item) => item.owner === role).length, account);
   else if (!accountMode && page === "dev" && id === "compare") content = comparePage(demo);
@@ -214,12 +293,106 @@ function render() {
     content = pageHeader(title, "#profile") + `<div class="content">${items.length ? rowsFor(items)
       : `<p class="notice">${page === "saved" ? "아직 관심 물품이 없어요." : "아직 올린 물품이 없어요."}</p>`}</div>`;
   }
-  if ((page === "profile" || page === "person") && (page === "profile" || id)) {
+   if ((page === "profile" || page === "person") &&
+      (page === "profile" || id)) {
+
     const uid = page === "profile" ? role : id;
-    const stats = state.publicReputation?.[uid] ?? reputation(state.rentals, uid);
-    const mean = stats.reviews.length ? (stats.reviews.reduce((n,r) => n+r.rating,0)/stats.reviews.length).toFixed(1) + "점" : "평가 전";
-    content = (page === "profile" ? content : pageHeader("상대방 프로필", "#rentals")) +
-      `<section class="content stack"><h2>거래 평판</h2><p>평균 별점 ${mean} · 후기 ${stats.reviews.length}개 · 완료 거래 ${stats.completed}건</p>${stats.reviews.map(r=>`<p>${r.rating}점 · ${escape(r.text)}</p>`).join("")}</section>`;
+
+    const stats = state.publicReputation?.[uid]
+      ?? reputation(state.rentals, uid);
+
+    const mean = stats.reviews.length
+      ? (stats.reviews.reduce((n, r) => n + r.rating, 0)
+        / stats.reviews.length).toFixed(1)
+      : "평가 전";
+
+    const name = people[uid]?.name ?? "이웃";
+
+    const ownerItems = allItems().filter(
+      item => item.owner === uid
+    );
+
+    const reputationHTML = `
+      <div class="person-stats">
+        <div>
+          <strong>${mean}</strong>
+          <span>평균 별점</span>
+        </div>
+        <div>
+          <strong>${stats.reviews.length}</strong>
+          <span>거래 후기</span>
+        </div>
+        <div>
+          <strong>${stats.completed}</strong>
+          <span>완료 거래</span>
+        </div>
+      </div>`;
+
+    const reviewsHTML = `
+      <section class="person-section">
+        <h2>거래 후기</h2>
+
+        ${stats.reviews.length
+          ? stats.reviews.map(r => `
+            <div class="person-review">
+              <strong class="review-stars">
+                ${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)}
+              </strong>
+              <p>${escape(r.text)}</p>
+            </div>
+          `).join("")
+          : `<p class="person-empty">
+               아직 등록된 거래 후기가 없어요.
+             </p>`}
+      </section>`;
+
+    if (page === "profile") {
+      content += `
+        <section class="content stack">
+          <h2>거래 평판</h2>
+          ${reputationHTML}
+          ${reviewsHTML}
+        </section>`;
+    } else {
+      content = pageHeader("상대방 프로필", "#home") + `
+        <div class="content stack person-page">
+
+          <section class="person-card">
+
+            <div class="person-avatar">
+              ${icon("user")}
+            </div>
+
+            <h2>${escape(name)}</h2>
+
+            ${reputationHTML}
+
+            ${uid !== role && role !== "admin" ? `
+              <button
+                class="button primary person-chat-button"
+                data-action="start-inquiry"
+                data-id="${escape(uid)}">
+                ${icon("chat")}
+                채팅하기
+              </button>
+            ` : ""}
+
+          </section>
+
+          <section class="person-section">
+            <h2>등록한 물품 (${ownerItems.length})</h2>
+
+            ${ownerItems.length
+              ? rowsFor(ownerItems)
+              : `<p class="person-empty">
+                   등록한 물품이 없어요.
+                 </p>`}
+          </section>
+
+          ${reviewsHTML}
+
+        </div>`;
+    }
   }
   screen.innerHTML = content ?? missingPage();
   const history = screen.querySelector(".chat-history");
@@ -233,9 +406,9 @@ function render() {
     ["home", "home", "홈"], ["rentals", "calendar", role === "admin" ? "분쟁 검토" : "내 대여"],
     ["chat", "chat", "채팅"], ["profile", "user", "내 정보"],
   ];
-  const totalUnread = state.rentals.filter(r => isParty(r) && chatAllowed(r)).reduce((n, r) => n + unread(state.messages[r.id], role), 0);
+  const totalUnread = totalChatUnread(role);
   navigation.innerHTML = tabs.map(([target, symbol, label]) =>
-    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}>${icon(symbol)}<span>${label}${target === "chat" && totalUnread ? ` <b aria-label="안 읽은 메시지">${totalUnread}</b>` : ""}</span></a>`).join("");
+    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}><span class="nav-icon">${icon(symbol)}${target === "chat" ? `<b class="nav-unread" aria-label="안 읽은 메시지 ${totalUnread}개" ${totalUnread ? "" : "hidden"}>${totalUnread > 99 ? "99+" : totalUnread}</b>` : ""}</span><span>${label}</span></a>`).join("");
 }
 
 let messageObserver;
@@ -257,9 +430,9 @@ function observeMessages() {
     }
     if (changed) {
       save();
-      const count = state.rentals.filter(r => isParty(r) && chatAllowed(r)).reduce((n,r) => n + unread(state.messages[r.id],role),0);
-      const label = navigation.querySelector('a[href="#chat"] span');
-      if (label) label.textContent = count ? "채팅 " + count : "채팅";
+      const count = totalChatUnread(role);
+      const label = navigation.querySelector(".nav-unread");
+      if (label) { label.hidden = !count; label.textContent = count > 99 ? "99+" : count; label.setAttribute("aria-label", `안 읽은 메시지 ${count}개`); }
     }
   }, {threshold: [0, 0.01]});
   history.querySelectorAll("[data-message-index]").forEach(el => messageObserver.observe(el));
@@ -625,6 +798,11 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const { action, id } = target.dataset;
+
+  if (action === "start-inquiry") {
+    await startInquiry(id);
+    return;
+  }
   if (["demo-subscription","demo-grant","promote","pickup"].includes(action)) {
     await benefitAction(action,id); return;
   }
@@ -927,12 +1105,14 @@ async function submit(form) {
     return;
   }
 
-  if (kind === "ai-room") {
+    if (kind === "ai-room") {
     assistantSession().draft = fields.get("question") ?? "";
-    if ((date.start || date.end) && (!date.start || !date.end || date.start < localDay() || date.end < date.start)) {
-      formError(form, "대여 시작일과 종료일을 확인해 주세요."); return;
-    }
-    assistantSession().criteria = {...filters, date, maxPrice: fields.get("budget") ? Number(fields.get("budget")) : null};
+    assistantSession().criteria = {
+      ...filters,
+      date: {},
+      maxPrice: null
+    };
+
     await sendAssistant();
     return;
   }
@@ -1045,6 +1225,33 @@ async function submit(form) {
     return;
   }
 
+  if (kind === "inquiry-message") {
+    const room = inquiryById(id);
+
+    if (!room || !isInquiryParty(room, state.role)) return;
+
+    const message = String(fields.get("message") ?? "").trim();
+
+    if (!message || message.length > 350) return;
+
+    (state.messages[id] ??= []).push({
+      id: newId(),
+      sender: state.role,
+      text: message,
+      sentAt: Date.now()
+    });
+
+    const saving = save();
+    if (saving && !await saving) return;
+
+    if (route()[0] === "chat" && route()[1] === id) {
+      render();
+      screen.querySelector(".compose input")?.focus();
+    }
+
+    return;
+  }
+
   const rental = rentalById(id);
   if (!rental) return;
   const owns = state.role === rental.lenderId;
@@ -1143,9 +1350,9 @@ if (persistDatabase) {
         if (updated && draft !== undefined) { updated.value = draft; if (focused) updated.focus({preventScroll:true}); }
         if (scroll !== null && screen.querySelector(".chat-history")) screen.querySelector(".chat-history").scrollTop = scroll;
       } else {
-        const count = state.rentals.filter(r => isParty(r) && chatAllowed(r)).reduce((n,r) => n + unread(state.messages[r.id],state.role),0);
-        const label = navigation.querySelector('a[href="#chat"] span');
-        if (label) label.textContent = count ? "채팅 " + count : "채팅";
+        const count = totalChatUnread();
+        const label = navigation.querySelector(".nav-unread");
+        if (label) { label.hidden = !count; label.textContent = count > 99 ? "99+" : count; label.setAttribute("aria-label", `안 읽은 메시지 ${count}개`); }
       }
     } catch { /* Connection can recover on the next foreground refresh. */ }
     finally { refreshing = false; }
