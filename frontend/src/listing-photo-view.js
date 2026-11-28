@@ -1,4 +1,5 @@
 import { introductionIds, introductionPool, introductionPhotos } from "./listing-presentation.js";
+import { listingStatePhoto } from "./handoff-photos.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import { photoUrl } from "./photo-store.js";
 import { maxListingPhotos, missingListingViews } from "./listing-photos.js";
@@ -27,7 +28,7 @@ export function listingPhotoPanel(draft, escape) {
     ${missing.length ? `<button type="button" class="photo-method camera" data-action="listing-camera" ${disabled ? "disabled" : ""}>
       <span class="photo-method-icon">${icon("camera")}</span><span class="photo-method-copy"><strong>${draft.photos.length ? "남은 부위 촬영하기" : "사진 촬영 시작"}</strong><span>${escape(missing[0].label)}부터 ${missing.length}개 부위를 촬영해요</span></span>${icon("right")}</button>` : !review ? '<button type="button" class="button secondary" data-action="listing-review-photos">전체 사진 확인</button>' : ""}
     ${review && missing.length ? `<p class="listing-photo-feedback">${missing.map((view) => escape(view.label)).join(" · ")} 사진이 필요해요.</p>` : ""}
-    <p class="listing-camera-policy">상태 사진은 앱에서 직접 촬영해요. 인도할 때는 상태를 확인하고 달라진 부위만 다시 찍어요.</p>
+    <p class="listing-camera-policy">현재 상태가 잘 보이는 사진을 준비해 주세요. 인도할 때는 달라진 부위만 다시 찍어요.</p>
     <p class="listing-photo-feedback" role="status" aria-live="polite">${escape(draft.error)}</p>
   </section>`;
 }
@@ -44,10 +45,10 @@ export function itemGallery(item, selectedId, escape) {
 }
 
 export function listingStatePhotos(item, escape) {
-  return `<p class="hint">앱에서 직접 촬영한 등록 당시의 상태예요. 인도할 때 실제 상태와 함께 확인해 주세요.</p><div class="listing-state-grid">${(item.inspectionPlan?.views || []).map(view => {
-    const photo = item.photos?.find(p => p.viewId === view.id && p.origin === 'camera');
+  return `<p class="hint">등록한 상태 사진이에요. 인도할 때 실제 상태와 함께 확인해 주세요.</p><div class="listing-state-grid">${(item.inspectionPlan?.views || []).map(view => {
+    const photo = listingStatePhoto(item, view.id);
     const captured = photo?.capturedAt && new Date(photo.capturedAt);
-    const date = captured && Number.isFinite(captured.getTime()) ? captured.toLocaleString('ko-KR') : '촬영일 정보 없음';
+    const date = captured && Number.isFinite(captured.getTime()) ? captured.toLocaleString('ko-KR') : '사진 날짜 정보 없음';
     return `<figure>${photo ? `<img src="${escape(photoUrl(photo.source))}" alt="${escape(view.label)} 상태 사진">` : '<p>등록된 사진이 없어요.</p>'}<figcaption><strong>${escape(view.label)}</strong><small>${escape(date)}</small></figcaption></figure>`;
   }).join('')}</div>`;
 }

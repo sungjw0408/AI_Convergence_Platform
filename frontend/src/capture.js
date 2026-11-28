@@ -3,12 +3,50 @@ import { photoUrl } from "./photo-store.js";
 export const faces = ["정면", "후면", "왼쪽 면", "오른쪽 면", "윗면", "아랫면"];
 const capturedFrames = new WeakMap();
 
-// An in-memory guard binds this exact, immutable frame Blob to its capture flow.
-// It does not authenticate a physical camera or replace server-side verification.
-export function isDirectCapture(photo, context = null) {
+// Bind the exact image bytes and their source to the flow that accepted them.
+export function isRecordedCapture(photo, context = null) {
   const frame = photo?.blob && capturedFrames.get(photo.blob);
   return Boolean(frame && frame.context === context && frame.capturedAt === photo.capturedAt
-    && frame.width === photo.width && frame.height === photo.height);
+    && frame.width === photo.width && frame.height === photo.height && frame.origin === photo.origin);
+}
+
+export function pickCaptureFile(form, { face, context = null, onCapture, onError }) {
+  if (form.querySelector("[data-capture-file]")) return;
+  const types = ["image/jpeg", "image/png", "image/webp"];
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = types.join(",");
+  input.hidden = true;
+  input.setAttribute("data-capture-file", "");
+  form.append(input);
+  input.addEventListener("cancel", () => input.remove(), { once: true });
+  input.addEventListener("change", async () => {
+    try {
+      const file = input.files[0];
+      if (!file) return;
+      if (!types.includes(file.type) || !file.size || file.size > 4 * 1024 * 1024) {
+        throw new Error("4MB 이하의 JPG, PNG 또는 WebP 사진을 골라 주세요.");
+      }
+      const image = await createImageBitmap(file).catch(() => {
+        throw new Error("사진을 열 수 없어요. 다른 사진으로 다시 시도해 주세요.");
+      });
+      const { width, height } = image;
+      image.close();
+      if (Math.min(width, height) < 96 || width * height > 20_000_000) {
+        throw new Error("가로·세로가 각각 96픽셀 이상이고 2,000만 픽셀 이하인 사진을 골라 주세요.");
+      }
+      if (!form.isConnected) return;
+      const capturedAt = new Date().toISOString();
+      const capture = { blob: file, width, height, capturedAt, face, origin: "file" };
+      capturedFrames.set(file, { context, capturedAt, width, height, origin: capture.origin });
+      onCapture(capture);
+    } catch (error) {
+      if (form.isConnected) onError(error.message);
+    } finally {
+      input.remove();
+    }
+  }, { once: true });
+  input.click();
 }
 
 // The guide is a separate DOM layer. Only the unmirrored video frame is saved.
@@ -99,8 +137,8 @@ export function openCapture({ reference, face = "정면", instruction, returning
         const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
         if (!blob) throw new Error("촬영에 실패했어요. 다시 시도해 주세요.");
         if (closed) return;
-        capture = { blob, capturedAt: new Date().toISOString(), width: canvas.width, height: canvas.height, face, source: "camera" };
-        capturedFrames.set(blob, { context, capturedAt: capture.capturedAt, width: capture.width, height: capture.height });
+        capture = { blob, capturedAt: new Date().toISOString(), width: canvas.width, height: canvas.height, face, source: "camera", origin: "camera" };
+        capturedFrames.set(blob, { context, capturedAt: capture.capturedAt, width: capture.width, height: capture.height, origin: capture.origin });
         if (shots) {
           // Keep one stream open; each fresh frame advances to the next part.
           const accepted = onCapture(capture, shots[shotIndex]);

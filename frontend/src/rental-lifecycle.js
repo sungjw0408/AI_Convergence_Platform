@@ -47,8 +47,7 @@ export function lifecyclePanel(rental, role, escape, won) {
   if (rental.status === 'complete' && f.lateDue > 0 && borrows) buttons.push(action('연체료 결제', 'pay_late'));
   if (['confirmed','handover'].includes(rental.status) && (owns || borrows) && !rental.noShow) buttons.push(action('노쇼 신고', 'report_noshow'));
   if (admin && rental.noShow?.status === 'reported') buttons.push(action('노쇼 확정·전액 환불', 'confirm_noshow'), action('노쇼 신고 기각', 'reject_noshow'));
-  if (owns && rental.status === 'checking') buttons.push(action('반납 시각 이의', 'return_objection'));
-  if ((owns || borrows) && ['checking','complete'].includes(rental.status) && !f.depositReturned) buttons.push(action('금액 이의 접수', 'amount_objection'));
+  if ((owns || borrows) && rental.status === 'complete' && !f.depositReturned) buttons.push(action('금액 이의 접수', 'amount_objection'));
   if (admin && (rental.returnObjection || rental.amountObjection)) buttons.push(action('이의 검토 완료', 'resolve_objection'));
   if ((owns || admin) && rental.dispute && !f.depositReturned) buttons.push(action('배상 협의 제안', 'propose_compensation'));
   if (borrows && rental.compensationProposal?.status === 'proposed') buttons.push(action('배상 제안 확인·동의', 'consent_compensation'), action('배상 제안 거부', 'reject_compensation'));
