@@ -10,6 +10,8 @@ from http.server import ThreadingHTTPServer
 import json
 import urllib.request
 import urllib.error
+from unittest.mock import patch
+from env_config import photo_skip_allowed
 
 
 class LifecycleTests(unittest.TestCase):
@@ -50,6 +52,93 @@ class LifecycleTests(unittest.TestCase):
         self.now = timestamp(after)
         self.call('return', inspection=record)
         return self.r
+
+    def test_photo_skip_requires_explicit_local_test_capability(self):
+        self.paid()
+        record = self.inspection()
+        record['before'] = {}
+        with self.assertRaisesRegex(ValueError, '로컬 테스트'):
+            self.call('handoff', 'lender', inspection=record, skipPhotos=True)
+        with self.assertRaisesRegex(ValueError, '모든 부위'):
+            self.call('handoff', 'lender', inspection=record)
+        self.assertEqual(self.r['status'], 'confirmed')
+        with patch.dict('os.environ', {'RENTO_TEST_PHOTO_SKIP': '1', 'FIRESTORE_EMULATOR_HOST': '127.0.0.1:8180'}):
+            self.assertTrue(photo_skip_allowed())
+            self.assertFalse(photo_skip_allowed(account_mode=True))
+        with patch.dict('os.environ', {'RENTO_TEST_PHOTO_SKIP': '1', 'FIRESTORE_EMULATOR_HOST': ''}):
+            self.assertFalse(photo_skip_allowed())
+
+    def test_photo_skip_keeps_manual_checks_and_allows_return_settlement(self):
+        self.paid()
+        record = self.inspection()
+        record.update(before={}, beforeChecks=[], results={'front': {'status': 'clear'}})
+        record['plan']['checks'] = [{'id': 'power'}]
+        data = dict(rentalId=self.r['id'], inspection=record, skipPhotos=True)
+        with self.assertRaisesRegex(ValueError, '구성품과 상태'):
+            execute(self.records, self.items, 'lender', 'handoff', data, 'skip-unchecked', self.now, allow_photo_skip=True)
+        record['beforeChecks'] = ['power']
+        self.r = execute(self.records, self.items, 'lender', 'handoff', data, 'skip-handoff', self.now, allow_photo_skip=True)
+        self.assertEqual(self.r['status'], 'handover')
+        self.assertIsNone(self.r['before'])
+        self.assertTrue(self.r['inspection']['beforePhotoSkipped'])
+        self.assertEqual(self.r['inspection']['results'], {})
+        self.call('receive')
+        record = copy.deepcopy(self.r['inspection'])
+        record['afterChecks'] = ['power']
+        self.now = timestamp('2026-11-28T08:00:00+09:00')
+        self.r = execute(self.records, self.items, 'renter', 'return',
+                         dict(rentalId=self.r['id'], inspection=record, skipPhotos=True),
+                         'skip-return', self.now, allow_photo_skip=True)
+        self.assertEqual(self.r['status'], 'checking')
+        self.assertIsNone(self.r['after'])
+        self.assertTrue(self.r['inspection']['afterPhotoSkipped'])
+        self.call('complete', 'lender')
+        self.assertEqual(self.r['status'], 'complete')
+        self.assertTrue(self.r['finance']['depositReturned'])
+
+    def test_registered_baseline_partial_reshoot_and_both_party_confirmation(self):
+        plan = {'views':[{'id':'front'},{'id':'back'}], 'checks':[{'id':'power'}]}
+        old_time = '2026-10-01T00:00:00Z'
+        original = {'id':'registered-front', 'source':'data:image/png;base64,AAAA', 'viewId':'front', 'origin':'camera', 'capturedAt':old_time}
+        self.items[0].update(inspectionPlan=plan, photos=[original], presentationPhotos=[{'id':'album', 'origin':'album', 'source':'data:image/png;base64,BBBB'}])
+        self.paid()
+        record = {'plan':plan,'before':{'front':{**original,'listingPhotoId':original['id'],'capturedAt':'FAKE'},
+                  'back':{'source':'capture:00000000-0000-0000-0000-000000000002','capturedAt':'2026-11-26T00:00:00Z'}},
+                  'after':{},'beforeChecks':['power'],'afterChecks':[],'beforeNote':'기존 흠집 확인'}
+        self.call('handoff','lender',inspection=record,reuseListingPhotos=True,confirmedViews=['front','back'])
+        self.assertEqual(self.r['inspection']['before']['front']['capturedAt'],old_time)
+        self.assertEqual(self.r['inspection']['before']['front']['sourceKind'],'listing')
+        self.assertEqual(self.r['inspection']['before']['back']['sourceKind'],'handoff')
+        with self.assertRaises(ValueError): self.call('receive')
+        with self.assertRaises(ValueError): self.call('receive',confirmedViews=['front'],confirmedChecks=['power'])
+        old_revision = self.r['inspection']['handoffReview']['revisionId']
+        revised = copy.deepcopy(self.r['inspection'])
+        self.call('revise_handoff','lender',inspection=revised,reuseListingPhotos=True,confirmedViews=['front','back'])
+        with self.assertRaisesRegex(ValueError, '사진이 변경'):
+            self.call('receive',confirmedViews=['front','back'],confirmedChecks=['power'],handoffRevision=old_revision)
+        self.call('receive',confirmedViews=['front','back'],confirmedChecks=['power'],handoffRevision=self.r['inspection']['handoffReview']['revisionId'])
+        self.assertEqual(self.r['inspection']['handoffReview']['renterConfirmedAt'],self.now)
+        with self.assertRaises(ValueError): self.call('revise_handoff','lender',inspection=revised,reuseListingPhotos=True,confirmedViews=['front','back'])
+        returned = copy.deepcopy(self.r['inspection'])
+        returned['after'] = {view:{'source':'capture:00000000-0000-0000-0000-000000000003'} for view in ['front','back']}
+        returned['afterChecks'] = ['power']
+        self.call('return',inspection=returned)
+        self.assertEqual(self.r['status'],'checking')
+        self.call('complete','lender')
+        self.assertEqual(self.r['status'],'complete')
+
+    def test_album_photos_and_relabelled_views_cannot_be_handoff_evidence(self):
+        plan = {'views':[{'id':'front'}], 'checks':[]}
+        photo = {'id':'registered-front','source':'data:image/png;base64,AAAA','viewId':'front','origin':'camera'}
+        self.items[0].update(inspectionPlan=plan,photos=[photo])
+        self.paid()
+        record = {'plan':plan,'before':{'front':{'source':'data:image/png;base64,BBBB','listingPhotoId':'album'}},'after':{},'beforeChecks':[],'afterChecks':[]}
+        with self.assertRaisesRegex(ValueError,'등록된 동일 부위'):
+            self.call('handoff','lender',inspection=record,reuseListingPhotos=True,confirmedViews=['front'])
+        record['before']['front'] = {**photo,'listingPhotoId':photo['id'],'source':'data:image/png;base64,BBBB'}
+        with self.assertRaises(ValueError):
+            self.call('handoff','lender',inspection=record,reuseListingPhotos=True,confirmedViews=['front'])
+        self.assertEqual(self.r['status'],'confirmed')
 
     def test_24h_fee_and_explicit_zone(self):
         self.assertEqual(rental_days(0, DAY), 1)

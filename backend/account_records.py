@@ -348,7 +348,7 @@ def validate_listing(record, uid, current, policy, *, root=None, transaction=Non
 
     require(set(record) <= {"id", "title", "description", "category", "neighborhood", "price", "deposit",
                             "image", "availableFrom", "availableTo", "owner", "createdAt",
-                            "photos", "coverPhotoId", "inspectionPlan", "itemValue", "pricingContext"})
+                            "photos", "presentationPhotos", "coverPhotoId", "inspectionPlan", "itemValue", "pricingContext"})
     validate_listing_details(record, LISTING_EDIT_FIELDS)
     current_month = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m")
     require(valid_pricing_context(record.get("pricingContext"), value["amountWon"], current_month))
@@ -510,6 +510,23 @@ def validate_listing_photos(record):
         and set(assigned_views) == required_views
     )
 
+    presentation = record.get('presentationPhotos')
+    if presentation is not None:
+        require(isinstance(presentation, list) and 1 <= len(presentation) <= 8)
+        public = {}
+        for photo in presentation:
+            require(isinstance(photo, dict) and matches(IDS, photo.get('id')) and photo['id'] not in public)
+            if 'photoId' in photo:
+                require(set(photo) == {'id', 'photoId'} and photo['id'] == photo['photoId'] and photo['photoId'] in photos_by_id)
+                public[photo['id']] = photos_by_id[photo['photoId']]
+            else:
+                require(set(photo) == {'id','source','origin','label'} and photo.get('origin') == 'album'
+                        and photo['id'] not in photos_by_id and matches(IMAGE, photo.get('source'))
+                        and len(photo['source']) <= 95_000 and text(photo.get('label'),100,True))
+                public[photo['id']] = photo['source']
+        require(sum(len(value) for value in photos_by_id.values()) + sum(len(p['source']) for p in presentation if 'source' in p) + len(record['image']) < 900_000)
+        photos_by_id = public
+
     cover_id = record.get("coverPhotoId")
 
     require(
@@ -544,7 +561,10 @@ def validate_inspection(record, field):
             require(
                 all(
                     isinstance(photo, dict)
-                    and matches(CAPTURE, photo.get("source"))
+                    and (matches(CAPTURE, photo.get("source"))
+                         or (phase == 'before' and record.get('lifecycleVersion') == 1
+                             and inspection.get('handoffReview') and photo.get('sourceKind') == 'listing'
+                             and matches(IMAGE, photo.get('source'))))
                     for photo in photos.values()
                 )
             )
@@ -772,6 +792,7 @@ def validate_rental(root, transaction, uid, record, current, policy):
                     "before",
                     "beforeNote",
                     "beforeChecks",
+                    "handoffReview",
                 )
             )
         )

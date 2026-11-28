@@ -87,11 +87,16 @@ test("photo limit and cover reassignment still work with camera-only photos", as
   assert.equal(draft.coverId, draft.photos[0].id);
 });
 
-test("registration exposes no album button or hidden file input", () => {
-  const html = registerPage("lender", "죽전동");
+test("introduction albums are available only in basic information, while inspection stays camera-only", () => {
+  const draft = newListingDraft("죽전동");
+  const html = registerPage("lender", "죽전동", draft);
   assert.match(html, /사진 촬영/);
   assert.ok(!html.includes("앨범에서 선택"));
-  assert.ok(!html.includes('type="file"'));
+  assert.ok(html.includes('data-introduction-files'));
+  draft.step=1;
+  const inspection=registerPage('lender','죽전동',draft);
+  assert.ok(!inspection.includes('type="file"'));
+  assert.match(inspection,/data-action="listing-camera"/);
   assert.ok(!html.includes("listing-album"));
 });
 

@@ -6,6 +6,7 @@ import sys
 from urllib.parse import urlsplit
 
 from flask import abort, g, jsonify, request
+from env_config import photo_skip_allowed
 
 from listing_visibility import public_listing
 
@@ -203,7 +204,8 @@ def register_database(app, client=None, space=None, account_mode=False, deposit_
                 from lifecycle_server import DEMO_ITEMS
                 items = DEMO_ITEMS
             result = execute(rentals, items, actor, action, data, body.get("requestId"), now, admin,
-                             deposit_policy=deposit_policy, require_value=account_mode)
+                             deposit_policy=deposit_policy, require_value=account_mode,
+                             allow_photo_skip=photo_skip_allowed(account_mode=account_mode))
         changed = [record for record in rentals if record != old.get(record["id"])]
         if changed:
             for notice in lifecycle_notices(old.values(), rentals, now):

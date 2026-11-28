@@ -1,3 +1,4 @@
+import { reservationPicker } from "./reservation-picker.js";
 // Pure display/validation helpers; the server owns all amounts and state changes.
 export function chargedDays(start, end) {
   const duration = new Date(end).getTime() - new Date(start).getTime();
@@ -5,9 +6,7 @@ export function chargedDays(start, end) {
 }
 
 export function reservationInputs(date = {}, zone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
-  const value = (day, time) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(day || '') ? day : /^\d{4}-\d{2}-\d{2}$/.test(day || '') ? `${day}T${time}` : '';
-  // Explicit dates/times are submitted as ISO instants; zone is captured for calendar late fees.
-  return `<div class="field-pair"><label>대여 시작<input type="datetime-local" name="start" value="${value(date.start, '09:00')}" required></label><label>반납 예정<input type="datetime-local" name="end" value="${value(date.end, '18:00')}" required></label></div><input type="hidden" name="timeZone" value="${zone}"><p class="hint">현재 기기의 날짜와 시각을 기준으로 예약해요.</p>`;
+  return reservationPicker(date) + `<input type="hidden" name="timeZone" value="${zone.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"><p class="hint">현재 기기의 날짜와 시각을 기준으로 예약해요.</p>`;
 }
 
 export async function sendRentalCommand(action, data, actor, accountMode = false) {

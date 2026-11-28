@@ -5,7 +5,7 @@ import "fake-indexeddb/auto";
 import { localDay } from "../src/model.js";
 import { photoBlob } from "../src/photo-store.js";
 
-test("multi-angle registration persists originals and cover; gallery keeps dates; trade needs new photos", async () => {
+test("registration preserves original state photos; handoff reshoots only changed views with mutual confirmation", async () => {
   const dom = new JSDOM(`<meta name="rento-deposit-policy" content='{"version":"test-only","rateBps":3000,"minWon":null,"maxWon":null}'><main id="screen"></main><nav id="navigation"></nav><dialog id="dialog"></dialog><div id="toast" hidden></div>`,
     { url: "http://localhost:8790/#new", pretendToBeVisual: true });
   const { window } = dom;
@@ -85,7 +85,8 @@ test("multi-angle registration persists originals and cover; gallery keeps dates
     click('#dialog [data-action="close"]');
     assert.equal(document.querySelector('[name="price"]').value, "5000");
     click('.registration-actions [data-action="listing-prev"]'); assert.equal(step(), 1);
-    assert.equal(document.querySelector('input[type="file"]'), null);
+    assert.equal(document.querySelector('input[type="file"]:not([data-introduction-files])'), null);
+    assert.equal(document.querySelector('[data-introduction-files]'),null);
     click('[data-action="listing-camera"]'); click('[data-camera="start"]');
     await wait(() => !document.querySelector('[data-camera="shoot"]').hidden);
     for (let i=0; i<4; i++) {
@@ -161,6 +162,30 @@ test("multi-angle registration persists originals and cover; gallery keeps dates
     assert.equal(rental.deposit, 9000);
     assert.equal(rental.itemValue.amountWon, 30000);
     assert.equal(rental.depositPolicy.version, "test-only");
+    // Handoff now starts from registered views; only the changed side is reshot.
+    location.hash='#profile';await wait(()=>document.querySelector('[data-action="role"][data-id="lender"]'));
+    click('[data-action="role"][data-id="lender"]');location.hash=`#trade/${rental.id}`;
+    await wait(()=>document.querySelector('[data-id="confirm"]'));click('[data-id="confirm"]');
+    await wait(()=>document.querySelector('[data-id="handoff"]'));click('[data-id="handoff"]');
+    assert.equal(document.querySelectorAll('.inspection-capture-tile img').length,4);
+    const previousCounter=counter;
+    click('[data-action="capture-evidence"][data-id="right"]');click('[data-camera="start"]');
+    await wait(()=>!document.querySelector('[data-camera="shoot"]').hidden);
+    click('[data-camera="shoot"]');await wait(()=>!document.querySelector('[data-camera="use"]').hidden);click('[data-camera="use"]');
+    await wait(()=>!document.querySelector('.camera-dialog'));
+    assert.equal(counter,previousCounter+1);
+    document.querySelectorAll('[name="confirmedView"], [name="check"]').forEach(input=>{if(!input.checked)input.click();});
+    submit('handoff');await wait(()=>JSON.parse(localStorage.getItem(key)).rentals[0].status==='handover');
+    const before=JSON.parse(localStorage.getItem(key)).rentals[0].inspection.before;
+    assert.equal(before.left.source,item.photos.find(p=>p.viewId==='left').source);
+    assert.notEqual(before.right.source,item.photos.find(p=>p.viewId==='right').source);
+    location.hash='#profile';await wait(()=>document.querySelector('[data-action="role"][data-id="renter"]'));
+    click('[data-action="role"][data-id="renter"]');location.hash=`#trade/${rental.id}`;
+    await wait(()=>document.querySelector('[data-id="receive"]'));click('[data-id="receive"]');
+    submit('receive-check');await wait(()=>!document.querySelector('[data-form="receive-check"] [type="submit"]').disabled);assert.equal(JSON.parse(localStorage.getItem(key)).rentals[0].status,'handover');
+    document.querySelectorAll('#dialog [name="confirmedView"], #dialog [name="check"]').forEach(input=>input.click());
+    submit('receive-check');await wait(()=>JSON.parse(localStorage.getItem(key)).rentals[0].status==='active');
+
   } finally {
     globalThis.fetch = fetchBefore;
     document.querySelectorAll("dialog").forEach((dialog) => dialog.close());

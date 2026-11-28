@@ -2,7 +2,7 @@ import { conditions } from "./listing-advice.js";
 import { depositPolicyLabel, depositQuote, DEPOSIT_PENDING, itemValueFrom } from "./listing-pricing.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import { categories, localDay, neighborhoods } from "./model.js?v=rento-home-5-ren";
-import { listingPhotoPanel } from "./listing-photo-view.js";
+import { listingPhotoPanel, introductionPhotoPanel } from "./listing-photo-view.js";
 import { validateListingStep } from "./listing-registration.js";
 
 const won = (amount) => new Intl.NumberFormat("ko-KR").format(amount) + "원";
@@ -131,6 +131,7 @@ export function registrationForm(draft, escape, policy = null) {
     </div>` : ""}`;
   let content;
   if (step === 0) content = `<div class="registration-fields">
+    ${introductionPhotoPanel(draft, escape)}
     <label>물품명<input name="title" maxlength="48" placeholder="예: 미니 빔프로젝터" value="${escape(fields.title)}" required></label>
     ${assist}
     <label>카테고리<select name="category" required><option value="">선택해 주세요</option>${categories.slice(1).map((name) => `<option ${fields.category === name ? "selected" : ""}>${name}</option>`).join("")}</select></label>

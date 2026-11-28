@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from PIL import Image
 from unittest.mock import Mock, patch
 
-from account_records import ForbiddenRecord, authorize_updates, signup_profile, validate_listing, validate_rental
+from account_records import ForbiddenRecord, authorize_updates, signup_profile, validate_listing, validate_rental, validate_listing_photos
 from listing_assistance import suggest_listing
 from listing_market_prices import PricePage, _used_reference
 from listing_price_advice import suggest_price, validate_price_request
@@ -16,6 +16,20 @@ from listing_pricing import deposit_for_value, load_deposit_policy, valid_pricin
 
 
 class ListingSupportTests(unittest.TestCase):
+    def test_album_introduction_is_separate_from_required_camera_evidence(self):
+        import copy
+        plan = {'id':'general','version':1,'views':[{'id':'front','label':'앞면','instruction':'전체가 보이게 촬영','compare':True}], 'checks':[]}
+        photo = {'id':'camera-front','origin':'camera','label':'앞면','viewId':'front','source':'data:image/png;base64,AAAA'}
+        album = {'id':'album-cover','origin':'album','label':'소개 사진','source':'data:image/png;base64,BBBB'}
+        record = {'inspectionPlan':plan,'photos':[photo],'presentationPhotos':[album], 'coverPhotoId':album['id'],'image':album['source']}
+        validate_listing_photos(record)
+        bad = copy.deepcopy(record);bad['photos'][0]['origin']='album'
+        with self.assertRaises(ForbiddenRecord): validate_listing_photos(bad)
+        bad = copy.deepcopy(record);bad['presentationPhotos']=[{'id':'missing','photoId':'missing'}]
+        with self.assertRaises(ForbiddenRecord): validate_listing_photos(bad)
+        record.update(presentationPhotos=[{'id':photo['id'],'photoId':photo['id']}],coverPhotoId=photo['id'],image=photo['source'])
+        validate_listing_photos(record)
+
     def test_default_demo_policy_rounds_and_caps_the_deposit(self):
         policy = load_deposit_policy(None)
         self.assertEqual(policy["version"], "rento-demo-v2")
