@@ -238,13 +238,19 @@ export function rentalsPage(historical, catalog, role, direction) {
   const admin = role === "admin";
   const visible = historical.filter((rental) => admin ? (rental.status === "disputed" || rental.noShow?.status === "reported" || rental.finance?.depositHolds?.length)
     : direction === "out" ? rental.lenderId === role : rental.renterId === role);
-  return pageHeader(admin ? "분쟁 검토" : "내 대여") + `<div class="content">
+  return `<header class="chat-hub-header personal-hub-header">
+    <div class="chat-hub-title"><span class="chat-hub-symbol">${icon("calendar")}</span><h1>${admin ? "분쟁 검토" : "내 대여"}</h1></div>
+    <p>${admin ? "확인이 필요한 거래를 살펴보세요" : "빌리고 나누는 일상, 내 거래를 한눈에"}</p>
+  </header><div class="content rentals-hub">
     ${admin ? "" : `<div class="segments" aria-label="대여 역할">
       <button data-action="direction" data-id="in" aria-pressed="${direction === "in"}">빌리는 물품</button>
       <button data-action="direction" data-id="out" aria-pressed="${direction === "out"}">빌려주는 물품</button>
     </div>`}
+    <section class="rentals-hub-list" aria-label="대여 내역">
+    <div class="chat-hub-section-title"><h2>대여 내역</h2><span class="chat-hub-count">${visible.length}개</span></div>
     ${visible.length ? visible.map((rental) => rentalRow(rental, catalog(rental.itemId))).join("")
-    : empty(admin ? "검토할 분쟁이 없어요" : "아직 거래가 없어요", admin ? "신고가 접수되면 여기에 표시돼요." : "물품을 신청하거나 물품을 등록해 보세요.")}
+    : `<div class="rentals-hub-empty"><span class="chat-hub-empty-icon">${icon("calendar")}</span>` + empty(admin ? "검토할 분쟁이 없어요" : "아직 거래가 없어요", admin ? "신고가 접수되면 여기에 표시돼요." : "물품을 신청하거나 물품을 등록해 보세요.") + `</div>`}
+    </section>
   </div>`;
 }
 
@@ -349,8 +355,15 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
     (a.last?.sentAt ?? a.createdAt)
   );
 
-  return pageHeader("채팅") + `
-    <div class="content chat-list">
+  return `<header class="chat-hub-header">
+      <div class="chat-hub-title"><span class="chat-hub-symbol">${icon("chat")}</span><h1>채팅</h1></div>
+      <p>이웃과 나누는 대화, 더 편안한 거래의 시작</p>
+    </header>
+    <div class="content chat-hub">
+      <a class="chat-hub-discover" href="#home">${icon("search")}<span>빌릴 물품 찾아보기</span>${icon("right")}</a>
+      <section class="chat-hub-conversations" aria-labelledby="chat-hub-heading">
+      <div class="chat-hub-section-title"><h2 id="chat-hub-heading">거래 대화</h2><span class="chat-hub-count">${conversations.length}개</span></div>
+      <div class="chat-list ${conversations.length ? 'has-conversations' : 'is-empty'}">
       ${conversations.length
         ? conversations.map(({id, rental, room, last}) => {
           const item = rental ? catalog(rental.itemId) : null;
@@ -401,11 +414,23 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
                 : icon("right")}
             </a>`;
         }).join("")
-        : `<div class="empty-icon">${icon("chat")}</div>
-           ${empty("아직 대화가 없어요", "공급자 프로필에서 대화를 시작해 보세요.")}
-           <a class="button secondary empty-action" href="#home">
-             빌릴 물품 둘러보기
-           </a>`}
+        : `<div class="chat-hub-empty">
+             <span class="chat-hub-empty-icon">${icon("chat")}</span>
+             <h3>아직 대화가 없어요</h3>
+             <p>물품이 궁금할 땐 문의하고,<br>예약 후에는 만날 시간과 장소를 정해요.</p>
+             <a class="button chat-hub-browse" href="#home">빌릴 물품 둘러보기</a>
+           </div>`}
+      </div>
+      </section>
+      <section class="chat-hub-guide" aria-labelledby="chat-guide-heading">
+        <div class="chat-hub-section-title"><h2 id="chat-guide-heading">이웃과의 약속, 채팅으로 편하게</h2><span class="chat-guide-label">대화 가이드</span></div>
+        <div class="chat-guide-row"><span class="chat-guide-icon peach">${icon("calendar")}</span><div><h3>언제 어디서 만날까요?</h3><p>예약 후 만날 시간과 장소를 함께 정해요.</p></div></div>
+        <div class="chat-guide-row"><span class="chat-guide-icon sage">${icon("photo")}</span><div><h3>물품 상태도 미리 확인해요</h3><p>구성품과 사용 방법을 물어보고 상태를 확인해요.</p></div></div>
+        <div class="chat-hub-shortcuts">
+          <a href="#rentals">${icon("calendar")}<span>내 대여 확인</span>${icon("right")}</a>
+          <a href="#home">${icon("search")}<span>물품 둘러보기</span>${icon("right")}</a>
+        </div>
+      </section>
     </div>`;
 }
 
@@ -567,7 +592,10 @@ export function conversationPage(rental, item, messages, role, profiles = {}) {
 
 export function profilePage(role, savedCount, listingCount, account = null, profile = {}) {
   const displayName = profile.displayName ?? account?.displayName;
-  return pageHeader("내 정보") + `<div class="content stack profile-content">
+  return `<header class="chat-hub-header personal-hub-header">
+    <div class="chat-hub-title"><span class="chat-hub-symbol">${icon("user")}</span><h1>내 정보</h1></div>
+    <p>이웃과 함께 쌓아가는 나의 공유 생활</p>
+  </header><div class="content stack profile-content profile-hub">
     <div class="profile">
       <div class="avatar">${profileImage(profile.photo, escape) || icon("user")}</div>
       <div><h2>${account ? escape(displayName ? displayName + "님" : "내 계정") : people[role].name + "님"}</h2>

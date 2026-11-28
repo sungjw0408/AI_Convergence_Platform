@@ -1792,3 +1792,110 @@ details > label { display: grid; gap: 6px; margin-block: 8px; }
 .chat-thread-profile { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .chat-thread-profile .avatar { width: 34px; height: 34px; }
 .chat-thread-profile > svg { flex-shrink: 0; width: 16px; color: var(--muted); }
+
+/* Chat list presentation: warm highlights and quiet, compact guidance. */
+.chat-hub-header { padding: 26px var(--gutter) 24px; background: radial-gradient(ellipse at 100% 0%, #e1f1e7 0%, transparent 65%), linear-gradient(110deg, #fffdf9, #fcfdf8 58%, #fff8f2); }
+.chat-hub-title { display: flex; align-items: center; gap: 11px; }
+.chat-hub-title h1 { font-size: 25px; font-weight: 700; letter-spacing: -.045em; }
+.chat-hub-symbol { display: grid; place-items: center; width: 41px; height: 41px; border: 1px solid #eee5d9; border-radius: 15px; color: #8c7258; background: #fff2e5; }
+.chat-hub-symbol svg { width: 24px; height: 24px; }
+.chat-hub-header > p { margin-top: 11px; color: #7c847c; font-size: 13px; line-height: 1.6; }
+.content.chat-hub { display: grid; gap: 25px; padding: 19px var(--gutter) 25px; background: #fff; }
+.chat-hub-discover { display: flex; align-items: center; gap: 11px; min-height: 48px; padding: 12px 15px; border: 1px solid #e9ede5; border-radius: 15px; background: #f5f7f2; color: #7c877d; font-size: 13px; }
+.chat-hub-discover > svg { width: 19px; height: 19px; }
+.chat-hub-discover > svg:last-child { margin-left: auto; width: 15px; }
+.chat-hub-section-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 17px; }
+.chat-hub-section-title h2 { font-size: 15px; font-weight: 600; line-height: 1.5; letter-spacing: -.025em; }
+.chat-hub-count, .chat-guide-label { flex-shrink: 0; border-radius: 20px; background: #fff2e7; color: #8c7a65; font-size: 11px; padding: 6px 10px; }
+.chat-hub .chat-list { padding: 0; }
+.chat-hub .chat-list.is-empty { border: 1px solid #eeeae2; border-radius: 24px; background: linear-gradient(125deg, #fff, #fffdf9); }
+.chat-hub-empty { display: flex; align-items: center; flex-direction: column; padding: 26px 14px 24px; text-align: center; }
+.chat-hub-empty-icon { display: grid; place-items: center; width: 50px; height: 50px; border-radius: 17px; color: #917353; background: #fff0e1; }
+.chat-hub-empty-icon svg { width: 27px; height: 27px; }
+.chat-hub-empty h3 { margin-top: 19px; font-size: 17px; font-weight: 600; letter-spacing: -.035em; }
+.chat-hub-empty p { margin-top: 13px; color: #7c847a; font-size: 12px; line-height: 1.8; }
+.chat-hub .chat-hub-browse { margin-top: 20px; min-height: 43px; padding: 10px 18px; border: 1px solid #d5e2c9; border-radius: 14px; background: linear-gradient(#f2f8e9, #e3efd7); color: #42664c; box-shadow: 0 2px 0 #cadbbd, inset 0 1px 0 #fff; font-size: 13px; font-weight: 600; }
+.chat-hub .has-conversations { border: 1px solid #e7ece3; border-radius: 20px; padding: 0 14px; overflow: hidden; }
+.chat-hub .conversation-row { background: transparent; min-height: 92px; gap: 11px; }
+.chat-hub .conversation-row:last-child { border-bottom: 0; }
+.chat-hub .conversation-heading strong { font-size: 14px; }
+.chat-hub .conversation-heading .badge, .chat-hub .availability { font-size: 10px; padding: 3px 6px; }
+.chat-hub .conversation-summary p { font-size: 12px; margin-top: 5px; }
+.chat-hub .conversation-summary p + p { color: #778176; }
+.chat-hub .conversation-summary small { display: flex; flex-wrap: wrap; gap: 7px; font-size: 10px; margin-top: 6px; }
+.chat-hub .conversation-row .avatar { width: 42px; height: 42px; background: #f0f5eb; }
+.chat-hub .conversation-row .chat-thumbnail { width: 43px; height: 43px; border-radius: 11px; }
+.chat-hub .conversation-row .room-unread { top: 15px; right: 0; font-size: 10px; min-width: 19px; height: 19px; }
+.chat-hub-guide { padding-top: 2px; }
+.chat-guide-label { background: #fcf6ed; font-size: 10px; padding: 5px 8px; }
+.chat-guide-row { display: flex; align-items: flex-start; gap: 12px; margin-top: 18px; }
+.chat-guide-icon { display: grid; place-items: center; width: 35px; height: 35px; flex-shrink: 0; border-radius: 12px; }
+.chat-guide-icon svg { width: 19px; height: 19px; }
+.chat-guide-icon.peach { color: #947757; background: #fff1e4; }
+.chat-guide-icon.sage { color: #728b61; background: #eff5e7; }
+.chat-guide-row h3 { font-size: 13px; font-weight: 600; line-height: 1.5; }
+.chat-guide-row p { margin-top: 6px; font-size: 11px; color: #7c857a; line-height: 1.7; }
+.chat-hub-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; margin-top: 22px; }
+.chat-hub-shortcuts a { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 11px 12px; border: 1px solid #e5eadf; border-radius: 14px; background: #f8fbf5; color: #60705b; font-size: 12px; }
+.chat-hub-shortcuts a:last-child { background: #fff8f0; border-color: #eee3d5; color: #8c7a61; }
+.chat-hub-shortcuts svg { width: 16px; height: 16px; }
+.chat-hub-shortcuts svg:last-child { margin-left: auto; width: 13px; }
+@media (max-width: 360px) {
+  .chat-hub-section-title { gap: 6px; }
+  .chat-hub-section-title h2 { font-size: 13px; }
+  .chat-hub-shortcuts { gap: 7px; }
+  .chat-hub-shortcuts a { padding: 10px 8px; gap: 5px; font-size: 11px; }
+}
+
+/* Rental and account pages share the chat hub's sage and peach palette. */
+.personal-hub-header .chat-hub-symbol { color: #8a755c; background: #fff1e3; }
+.content.rentals-hub { padding: 20px var(--gutter) 28px; background: #fff; }
+.rentals-hub > .segments { margin: 0 0 25px; padding: 5px; gap: 5px; border: 1px solid #e9eee3; border-radius: 17px; background: #f2f6ed; }
+.rentals-hub > .segments button { min-height: 44px; border-radius: 12px; font-size: 13px; color: #87917f; }
+.rentals-hub > .segments button[aria-pressed="true"] { color: #47684e; background: #fffefa; border-color: #e5ebdf; box-shadow: 0 2px 5px #49663d08; }
+.rentals-hub .trade-row { padding: 15px 13px; margin-bottom: 11px; gap: 12px; border: 1px solid #e9ebe2; border-radius: 20px; background: linear-gradient(115deg,#fff,#fffdf8); align-items: center; }
+.rentals-hub .trade-row .trade-thumbnail { width: 53px; height: 53px; flex-shrink: 0; border-radius: 14px; background: #f1f5eb; color: #84947e; object-fit: cover; }
+.rentals-hub .trade-row strong { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.rentals-hub .trade-row small { margin: 6px 0 0; color: #879080; font-size: 11px; line-height: 1.6; }
+.rentals-hub .trade-row .badge { font-size: 10px; padding: 5px 8px; border-radius: 20px; white-space: nowrap; }
+.rentals-hub .trade-row .badge[data-status="pending"], .rentals-hub .trade-row .badge[data-status="payment_pending"] { background: #fff0df; color: #987b54; }
+.rentals-hub .trade-row .badge[data-status="confirmed"], .rentals-hub .trade-row .badge[data-status="active"] { background: #edf5e6; color: #59744e; }
+.rentals-hub .trade-row .badge[data-status="canceled"], .rentals-hub .trade-row .badge[data-status="expired"] { background: #f1f2ee; color: #899182; }
+.rentals-hub .rental-photo-link { color: #6c8461; font-size: 10px; margin-top: 6px; }
+.rentals-hub .trade-row > svg { color: #a1aa98; width: 13px; }
+.rentals-hub-empty { display: flex; flex-direction: column; align-items: center; padding: 30px 15px; border: 1px solid #eeeae2; border-radius: 24px; background: linear-gradient(125deg,#fff,#fffdf8); text-align: center; }
+.rentals-hub-empty .empty { padding: 19px 0 0; }
+.rentals-hub-empty .empty strong { font-size: 17px; font-weight: 600; }
+.rentals-hub-empty .empty p { margin-top: 12px; color: #85907e; font-size: 12px; line-height: 1.8; }
+.content.profile-hub { gap: 20px; padding-top: 20px; padding-bottom: 22px; }
+.profile-hub .profile { display: flex; align-items: center; gap: 14px; padding: 20px 17px; border: 1px solid #e4ebdb; border-radius: 22px; background: linear-gradient(120deg,#f2f8eb,#fcfcf4); }
+.profile-hub .profile > div:last-child { min-width: 0; }
+.profile-hub .profile .avatar { width: 58px; height: 58px; border: 3px solid #fffdf7; background: #e4efda; color: #6f8960; }
+.profile-hub .profile h2 { font-size: 19px; line-height: 1.4; margin: 0 0 6px; }
+.profile-hub .profile .muted { font-size: 12px; line-height: 1.7; color: #7d8876; overflow-wrap: anywhere; }
+.profile-hub > .button[data-action="edit-profile"] { align-self: flex-end; min-height: 36px; padding: 8px 15px; margin-top: -9px; border: 1px solid #e5eadf; border-radius: 12px; background: #fbfcf8; font-size: 12px; color: #718268; }
+.profile-hub .profile-stats { padding: 8px 0; border: 1px solid #e8ecdf; border-radius: 18px; background: #fffefa; }
+.profile-hub .profile-stats a { min-height: 67px; gap: 8px; border-right-color: #e9ecdf; }
+.profile-hub .profile-stats strong { font-size: 21px; color: #58784d; }
+.profile-hub .profile-stats span { font-size: 11px; color: #85907e; }
+.profile-hub .profile-stats svg { width: 21px; color: #718b62; }
+.profile-hub .profile-section > h2 { margin-bottom: 12px; font-size: 15px; font-weight: 600; }
+.profile-hub .menu-list { border: 1px solid #e9eae1; border-radius: 19px; background: #fff; padding: 4px 12px; }
+.profile-hub .menu-list a { min-height: 61px; padding: 11px 0; gap: 12px; border-bottom: 1px solid #f0f1e9; border-radius: 0; font-size: 13px; }
+.profile-hub .menu-list a:last-child { border-bottom: 0; }
+.profile-hub .menu-list a > svg:first-child { width: 33px; height: 33px; padding: 8px; border-radius: 11px; background: #f0f5e8; color: #7c926b; }
+.profile-hub .menu-list a:nth-child(even) > svg:first-child { background: #fff1e4; color: #9b8263; }
+.profile-hub .menu-list a > svg:last-child { width: 14px; color: #a1ab99; }
+.profile-hub .menu-list a > span { color: #8b957f; font-size: 11px; }
+.profile-hub form[data-form="logout"] { padding: 0; border: 0; }
+.profile-hub form[data-form="logout"] .button { min-height: 42px; border: 1px solid #ebe6dc; border-radius: 13px; background: #fffaf3; color: #937c61; font-size: 12px; }
+#screen:has(.profile-hub) > section.content.stack { margin: 0 var(--gutter) 24px; padding: 17px 15px; gap: 15px; border: 1px solid #e6ebdf; border-radius: 20px; background: #fcfdf9; }
+#screen:has(.profile-hub) > section.content.stack > h2, #screen:has(.profile-hub) .person-section h2 { font-size: 15px; font-weight: 600; }
+#screen:has(.profile-hub) .person-stats { padding: 14px 0; margin: 0; background: #f1f6eb; border-radius: 14px; border: 0; }
+#screen:has(.profile-hub) .person-stats strong { font-size: 19px; color: #5d7a51; }
+#screen:has(.profile-hub) .person-stats span { font-size: 10px; color: #85917c; }
+#screen:has(.profile-hub) .person-section { margin: 0; padding: 0; border: 0; }
+#screen:has(.profile-hub) .person-empty { margin-top: 13px; padding: 18px 10px; border-radius: 12px; background: #fff9f1; color: #8c8f80; font-size: 12px; }
+#screen:has(.profile-hub) .person-review { padding: 14px 0; font-size: 12px; }
+#screen:has(.profile-hub) .review-stars { color: #a68c54; font-size: 13px; }
+@media (max-width: 360px) { .rentals-hub .trade-row { gap: 8px; padding: 12px 10px; } .rentals-hub .trade-row strong { font-size: 13px; } .rentals-hub .trade-row .trade-thumbnail { width: 44px; height: 44px; } }
