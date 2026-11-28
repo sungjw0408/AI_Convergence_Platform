@@ -28,7 +28,7 @@ def home():
     if database_enabled:
         html = (Path(app.static_folder) / "index.html").read_text(encoding="utf-8")
         mode = "accounts" if accounts_enabled else "firestore"
-        return html.replace("<head>", f'<head><meta name="rento-database" content="{mode}">'), {"Cache-Control": "no-store"}
+        return html.replace("<head>", f'<head><meta name="rento-database" content="{mode}"><meta name="rento-lifecycle" content="enabled">'), {"Cache-Control": "no-store"}
     return app.send_static_file("index.html")
 
 

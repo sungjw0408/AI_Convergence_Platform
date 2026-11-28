@@ -9,6 +9,8 @@ firestore-debug*.log
 firebase-data/
 .env.rento-auth
 
+backend/.rento-data/
+backend/.venv-team2/
 .env
 
 *.bak

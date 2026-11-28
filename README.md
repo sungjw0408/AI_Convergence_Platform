@@ -3,6 +3,10 @@
 - [확정 서비스·운영 규칙](docs/confirmed-rules.md)
 - [팀별 기능 구현 안내서](docs/구현안내서.md)
 
+## 팀원 2 예약·테스트 결제·반납
+
+[실행·검증 및 연동 안내](docs/team2-rental-lifecycle.md)를 참고하세요. 로컬 거래 시연은 `python backend/lifecycle_server.py --port 8003`으로 실행합니다. Windows는 먼저 안내서의 시간대 데이터 설치를 진행하세요. 실제 청구는 발생하지 않습니다.
+
 ## 개인 계정으로 렌토 사용
 
 [회원가입·로그인과 계정별 데이터 연결 안내](backend/README-accounts.md)를 참고하세요.

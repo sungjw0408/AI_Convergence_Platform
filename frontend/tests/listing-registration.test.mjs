@@ -113,12 +113,12 @@ test("multi-angle registration persists originals and cover; gallery keeps dates
     location.hash = "#profile"; await wait(() => document.querySelector('[data-action="role"][data-id="renter"]'));
     click('[data-action="role"][data-id="renter"]'); location.hash = `#item/${item.id}`;
     await wait(() => document.querySelector(".item-gallery-thumbnails"));
-    fill("start", "2026-11-28"); fill("end", "2026-11-29");
+    fill("start", "2026-11-28T09:00"); fill("end", "2026-11-29T18:00");
     click(`[data-action="listing-gallery"][data-id="${item.photos[0].id}"]`);
-    assert.equal(document.querySelector('[name="start"]').value, "2026-11-28");
+    assert.equal(document.querySelector('[name="start"]').value, "2026-11-28T09:00");
     assert.equal(document.querySelectorAll(".item-gallery-thumbnails button").length, 4);
     document.querySelector('[data-form="request"]').dispatchEvent(new window.Event("submit",{bubbles:true,cancelable:true}));
-    await wait(() => JSON.parse(localStorage.getItem(key)).rentals.length === 1);
-    assert.equal(JSON.parse(localStorage.getItem(key)).rentals[0].before, undefined);
+    await wait(() => document.querySelector(".form-error")?.textContent.includes("거래 서버"));
+    assert.equal(JSON.parse(localStorage.getItem(key)).rentals.length, 0);
   } finally { document.querySelectorAll("dialog").forEach((d)=>d.close()); dom.window.close(); }
 });

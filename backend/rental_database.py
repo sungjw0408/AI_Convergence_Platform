@@ -98,12 +98,115 @@ def register_database(app, client=None, space=None, account_mode=False):
         meta = root.get(transaction=transaction).to_dict() or {}
         if meta.get("revision", 0) != version:
             raise RevisionConflict()
+        # Even the role-switchable Firestore demo must not bypass the payment engine.
+        for name, record in updates:
+            if name != "rentals":
+                continue
+            current = root.collection(name).document(record["id"]).get(transaction=transaction).to_dict()
+            current = app_fields(current) if current else None
+            if not current:
+                raise ValueError("새 거래는 거래 명령으로 생성해 주세요.")
+            if current.get("lifecycleVersion") != 1 and record.get("status") != current.get("status"):
+                raise ValueError("기존 날짜 전용 시연 거래는 조회만 가능해요. 새로 신청해 주세요.")
+            if record.get("lifecycleVersion") == 1 or (current and current.get("lifecycleVersion") == 1):
+                if not current or record.get("lifecycleVersion") != 1:
+                    raise ValueError("새 거래는 거래 명령으로 생성해 주세요.")
+                allowed = {"inspection", "photoAnalysis", "review", "feedback"}
+                if any(record.get(k) != current.get(k) for k in record.keys() | current.keys() if k not in allowed):
+                    raise ValueError("거래 상태와 금액은 거래 명령으로만 변경할 수 있어요.")
+                old, new = current.get("inspection", {}), record.get("inspection", {})
+                if {k: v for k, v in old.items() if k != "results"} != {k: v for k, v in new.items() if k != "results"}:
+                    raise ValueError("촬영 기록은 촬영 완료 명령으로 저장해 주세요.")
+        if not uid:
+            from rental_lifecycle import validate_feedback_update
+            for name, record in updates:
+                if name == "rentals":
+                    current = app_fields(root.collection(name).document(record["id"]).get(transaction=transaction).to_dict())
+                    if record.get("feedback") != current.get("feedback"):
+                        actor = request.headers.get("X-Rento-Demo-Actor")
+                        validate_feedback_update(current, record, actor, int(time.time() * 1000))
         if uid:
             updates = authorize_updates(root, transaction, uid, updates)
         for name, record in updates:
             transaction.set(root.collection(name).document(record["id"]), stored_fields(record))
         transaction.set(root, {"revision": version + 1})
         return version + 1
+
+    # Lifecycle commands share the same root revision as generic record saves.
+    # Reading the root before any write serializes competing approvals/payments.
+    from rental_lifecycle import advance, execute, lifecycle_notices
+    from copy import deepcopy
+    import time
+
+    @firestore.transactional
+    def lifecycle(transaction, actor=None, body=None, admin=False):
+        meta = root.get(transaction=transaction).to_dict() or {}
+        rentals = [app_fields(doc.to_dict()) for doc in root.collection("rentals").stream(transaction=transaction)]
+        items = [doc.to_dict() for doc in root.collection("listings").stream(transaction=transaction)]
+        if not account_mode:
+            from lifecycle_server import DEMO_ITEMS
+            items = DEMO_ITEMS + items
+        old = deepcopy(rentals)
+        now = int(time.time() * 1000)
+        advance(rentals, now)
+        result = None
+        if body:
+            result = execute(rentals, items, actor, body.get("action"), body.get("data"), body.get("requestId"), now, admin)
+        changed = [record for record in rentals if record not in old]
+        if changed:
+            for notice in lifecycle_notices(old, rentals, now):
+                transaction.set(root.collection("notices").document(notice["id"]), notice)
+            for record in changed:
+                transaction.set(root.collection("rentals").document(record["id"]), stored_fields(record))
+            transaction.set(root, {"revision": meta.get("revision", 0) + 1})
+        return result
+
+    def lifecycle_access():
+        if request.headers.get("Origin") not in (None, request.host_url.rstrip("/")):
+            abort(403)
+        if account_mode:
+            account = getattr(g, "account", None)
+            if not account or request.headers.get("X-Rento-Account") != account["uid"]:
+                abort(401)
+            uid = account["uid"]
+            return uid, uid in os.environ.get("RENTO_ADMIN_UIDS", "").split(",")
+        if not getattr(g, "rento_team_authenticated", False) and (
+            request.remote_addr not in ("127.0.0.1", "::1") or
+            urlsplit(request.host_url).hostname not in ("localhost", "127.0.0.1", "::1")
+        ):
+            abort(403)
+        actor = request.headers.get("X-Rento-Demo-Actor")
+        if actor not in ("renter", "lender", "admin"):
+            abort(403)
+        return actor, actor == "admin"
+
+    @app.post("/api/rental-lifecycle")
+    def rental_lifecycle():
+        actor, admin = lifecycle_access()
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(error="거래 요청을 확인해 주세요."), 400
+        try:
+            # A separate committed sweep keeps expired holds released after a rejected command.
+            lifecycle(client.transaction())
+            record = lifecycle(client.transaction(), actor, body, admin)
+            return jsonify(rental=record)
+        except (ValueError, TypeError, KeyError) as error:
+            return jsonify(error=str(error)), 400
+        except GoogleAPICallError:
+            return jsonify(error="거래 저장에 실패했어요. 같은 요청으로 다시 시도해 주세요."), 503
+
+    # Timer recovery is independent of an open browser, and repeats after process restart.
+    from threading import Event, Thread
+    stop = Event()
+    def worker():
+        while not stop.wait(15):
+            try:
+                lifecycle(client.transaction())
+            except Exception:
+                app.logger.exception("Rental lifecycle recovery will retry")
+    Thread(target=worker, daemon=True, name="rental-lifecycle").start()
+    app.extensions["rento_lifecycle_stop"] = stop
 
     @app.route("/api/rental-database", methods=["GET", "POST"])
     def rental_database():
@@ -124,6 +227,7 @@ def register_database(app, client=None, space=None, account_mode=False):
             abort(403)
         try:
             if request.method == "GET":
+                lifecycle(client.transaction())
                 response = jsonify(read(client.transaction(read_only=True), uid, request.args.get("since", type=int)))
             else:
                 if not request.is_json:

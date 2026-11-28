@@ -1,4 +1,5 @@
-﻿import { comparisonResult } from "./compare.js";
+import { reservationInputs, chargedDays, lifecyclePanel } from "./rental-lifecycle.js?v=team2-develop-5";
+import { comparisonResult } from "./compare.js";
 import { inspectionCard } from "./inspection-view.js";
 import { photoUrl } from "./photo-store.js";
 import { itemGallery } from "./listing-photo-view.js";
@@ -145,8 +146,8 @@ export function home({ area, query, category, date, maxPrice, rows, unread }) {
 }
 
 export function rentalEstimate(item, start, end) {
-  const days = rentalDays(start, end);
-  if (!(days >= 1)) return "시작일과 종료일을 선택해 주세요.";
+  const days = chargedDays(start, end);
+  if (!(days >= 1)) return "시작·반납 날짜와 시각을 선택해 주세요.";
   const fee = item.price * days;
   return `대여료 ${won(fee)} (${days}일) + 보증금 ${won(item.deposit ?? 0)} = ${won(fee + (item.deposit ?? 0))}`;
 }
@@ -166,9 +167,9 @@ export function itemPage(item, role, date, selectedPhoto) {
     ${role === "admin" || role === item.owner ? '<p class="notice">대여자 프로필로 전환하면 이 물품에 대여를 신청할 수 있어요.</p>' :
     `<form data-form="request" data-id="${item.id}" class="form-card">
       <h2>대여 신청</h2>
-      ${dateInputs(date)}
+      ${reservationInputs(date)}
       <p id="estimate" aria-live="polite">${rentalEstimate(item, date.start, date.end)}</p>
-      <p class="hint">신청 시 금액이 거래 내역에 저장돼요. 보증금 수령과 반환은 당사자가 직접 확인해 주세요.</p>
+      <p class="hint">24시간을 1일로 올림해 계산해요. 공급자 승인 후 실제 청구 없는 테스트 결제를 마치면 예약이 확정돼요. 보증금은 물품에 기록된 금액을 사용하며 비율 정책은 미정이에요.</p>
       <p class="form-error" role="alert" hidden></p>
       ${button("대여 신청하기")}
     </form>`}
@@ -202,7 +203,7 @@ function rentalRow(rental, item, destination = "trade") {
 
 export function rentalsPage(historical, catalog, role, direction) {
   const admin = role === "admin";
-  const visible = historical.filter((rental) => admin ? rental.status === "disputed"
+  const visible = historical.filter((rental) => admin ? (rental.status === "disputed" || rental.noShow?.status === "reported" || rental.finance?.depositHolds?.length)
     : direction === "out" ? rental.lenderId === role : rental.renterId === role);
   return pageHeader(admin ? "분쟁 검토" : "내 대여") + `<div class="content">
     ${admin ? "" : `<div class="segments" aria-label="대여 역할">
@@ -221,15 +222,16 @@ function tradeButton(title, type, cls = "primary") {
 
 import { canReview, publicFeedback, unread } from "./community.js";
 
-export function tradePage(rental, item, role, feedback, selectedView) {
+export function tradePage(rental, item, role, feedback, selectedView, lifecycleMode = false) {
   const owns = role === rental.lenderId;
   const borrows = role === rental.renterId;
   const status = rental.status;
   let actions = "";
   if (status === "pending") actions = owns ? tradeButton("신청 승인", "confirm") + tradeButton("거절", "reject", "secondary")
     : borrows ? tradeButton("신청 철회", "cancel", "secondary") : "";
+  else if (status === "payment_pending") actions = (owns || borrows) ? tradeButton("예약 취소", "cancel", "secondary") : "";
   else if (status === "confirmed") actions = (owns ? tradeButton("대여 전 사진 촬영", "handoff") : "") + tradeButton("예약 취소", "cancel", "secondary");
-  else if (status === "handover" && borrows) actions = tradeButton("물품·구성품 수령 확인", "receive");
+  else if (status === "handover") actions = (borrows ? tradeButton("물품·구성품 수령 확인", "receive") : "") + ((owns || borrows) ? tradeButton("인도 전 예약 취소", "cancel", "secondary") : "");
   else if (status === "active" && borrows) actions = tradeButton("반납 사진 촬영", "return");
   else if (status === "checking" && borrows) actions = `<button class="button secondary" data-action="trade-action" data-id="reshoot" ${feedback?.busy ? "disabled" : ""}>반납 사진 다시 촬영</button>`;
   else if (status === "checking" && owns) actions = tradeButton("반납 확인 · 거래 완료", "complete") + tradeButton("손상·누락 신고", "dispute", "secondary");
@@ -249,12 +251,13 @@ export function tradePage(rental, item, role, feedback, selectedView) {
     ${status === "checking" && borrows ? '<p class="notice">공급자가 반납 상태를 확인하면 거래가 완료돼요.</p>' : ""}
     ${(owns || borrows) && ["confirmed", "handover", "active", "checking", "disputed", "complete"].includes(status)
       ? `<a class="button secondary" href="#chat/${rental.id}">${icon("chat")}거래 채팅</a>` : ""}
+    ${lifecyclePanel(rental, role, escape, won)}
     ${inspectionCard(rental, item, feedback, selectedView, escape)}
     ${rental.dispute ? `<section class="notice"><strong>분쟁 기록</strong><p>${escape(rental.dispute)}</p>${rental.resolution ? `<p>검토 의견 · ${escape(rental.resolution)}</p>` : ""}</section>` : ""}
     ${(owns || borrows) ? `<a href="#person/${escape(owns ? rental.renterId : rental.lenderId)}">상대방 프로필</a>` : ""}
     ${Object.entries(publicFeedback(rental)).map(([side, review]) => `<section class="notice"><strong>${side === "renter" ? "대여자" : "공급자"}가 남긴 후기 · ${review.rating}점</strong><p>${escape(review.text)}</p></section>`).join("")}
     ${status === "complete" && rental.completedAt && !Object.keys(publicFeedback(rental)).length ? '<p class="hint">후기는 양쪽 작성 또는 거래 완료 7일 후 공개돼요.</p>' : ""}
-    ${actions ? `<div class="action-row">${actions}</div>` : ""}
+    ${lifecycleMode && rental.lifecycleVersion !== 1 ? '<p class="notice">기존 날짜 전용 시연 거래는 조회만 가능해요. 날짜·시각을 선택해 새로 신청하면 테스트 결제와 자동 반납 흐름을 이용할 수 있어요.</p>' : actions ? `<div class="action-row">${actions}</div>` : ""}
   </div>`;
 }
 
