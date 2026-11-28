@@ -139,6 +139,7 @@ export function home({ area, query, category, date, maxPrice, rows, unread }) {
 export function rentalEstimate(item, start, end, policy = null, lifecycleMode = false) {
   const deposit = listingDeposit(item, policy);
   if (deposit === null) return depositBlock(item, policy);
+  if (!start || !end) return "시작일과 반납일을 선택해 주세요.";
   const days = lifecycleMode ? chargedDays(start, end) : rentalDays(start, end);
   if (!(days >= 1)) return lifecycleMode ? "시작·반납 날짜와 시각을 선택해 주세요." : "시작일과 종료일을 선택해 주세요.";
   const fee = item.price * days;
@@ -164,15 +165,21 @@ export function itemPage(item, role, date, selectedPhoto, policy = null, require
       : "보증금 정책이 정해지면 대여를 신청할 수 있어요.";
     action = `<p class="notice">${notice}</p>`;
   } else {
-    action = `<form data-form="request" data-id="${escape(item.id)}" class="form-card">
+    action = `<form data-form="request" data-id="${escape(item.id)}" class="form-card rental-request">
       <h2>대여 신청</h2>
-      ${lifecycleMode ? reservationInputs(date) : dateInputs(date)}
-      <p id="estimate" aria-live="polite">${rentalEstimate(item, date.start, date.end, policy, lifecycleMode)}</p>
-      <p class="hint">${lifecycleMode
-        ? "24시간 단위로 올림해 대여료를 계산해요. 공급자 승인 후 테스트 결제를 마치면 예약이 확정돼요."
-        : "신청 금액을 거래 내역에 저장해요. 이 시연 화면에서는 실제 금액을 청구하지 않아요."}</p>
+      ${lifecycleMode ? reservationInputs(date) : reservationPicker(date, { dateOnly: true, showGuide: false })}
+      <p id="estimate" class="rental-request-estimate" aria-live="polite">${rentalEstimate(item, date.start, date.end, policy, lifecycleMode)}</p>
       <p class="form-error" role="alert" hidden></p>
       ${button("대여 신청하기")}
+      <details class="rental-request-guide">
+        <summary>대여료·예약 안내 ${icon("chevronDown")}</summary>
+        ${lifecycleMode
+          ? `<p>시간은 현재 기기의 시간대를 기준으로 해요.</p>
+             <p>대여료는 24시간 단위로 올려 계산해요.</p>
+             <p>공급자 승인 후 테스트 결제를 마치면 예약이 확정돼요.</p>`
+          : `<p>신청 금액을 거래 내역에 저장해요.</p>
+             <p>이 시연 화면에서는 실제 금액을 청구하지 않아요.</p>`}
+      </details>
     </form>`;
   }
   return pageHeader("물품 상세", "#home") + `<div class="content">
@@ -252,7 +259,7 @@ function tradeButton(title, type, cls = "primary") {
 }
 
 
-import { canReview, publicFeedback, unread } from "./community.js";
+import { canReview, chatListed, publicFeedback, unread, visibleChatMessages } from "./community.js";
 
 export function tradePage(rental, item, role, feedback, selectedView, lifecycleMode = false) {
   const owns = role === rental.lenderId;
@@ -325,7 +332,7 @@ const chatClock = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2
 const messageDate = (message) => Number.isFinite(message?.sentAt)
   && Number.isFinite(new Date(message.sentAt).getTime()) ? new Date(message.sentAt) : null;
 
-export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [], profiles = {}) {
+export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [], profiles = {}, deleted = {}) {
   const conversations = [
     ...rentals
       .filter(r => (r.renterId === role || r.lenderId === role) && canChat(r))
@@ -343,10 +350,8 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
         last: threads[room.id]?.at(-1),
         createdAt: room.createdAt ?? 0
       }))
-  ].sort((a, b) =>
-    (b.last?.sentAt ?? b.createdAt) -
-    (a.last?.sentAt ?? a.createdAt)
-  );
+  ].filter(({id}) => chatListed(threads[id], deleted, id))
+    .sort((a, b) => (b.last?.sentAt ?? b.createdAt) - (a.last?.sentAt ?? a.createdAt));
 
   return `<div class="chat-hub">
     <div class="chat-hub-overview">
@@ -361,48 +366,52 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
           const partner = room
             ? chatProfile(inquiryPartner(room, role), profiles)
             : rentalChatProfile(rental, role, profiles);
-          const count = unread(threads[id], role);
+          const count = unread(visibleChatMessages(threads[id], deleted[id]), role);
           const time = messageDate(last);
 
           return `
-            <a class="conversation-row" href="#chat/${escape(id)}">
-              ${chatAvatar(partner)}
+            <div class="conversation-entry swipe-row" data-swipe-row>
+              <a class="conversation-row swipe-content" href="#chat/${escape(id)}" data-swipe-content aria-keyshortcuts="ArrowLeft">
+                ${chatAvatar(partner)}
 
-              <div class="conversation-summary">
-                <div class="conversation-heading">
-                  <strong>${escape(partner.name)}</strong>
+                <div class="conversation-summary">
+                  <div class="conversation-heading">
+                    <strong>${escape(partner.name)}</strong>
 
-                  ${rental
-                    ? badge(rental.status)
-                    : '<span class="availability">문의 채팅</span>'}
+                    ${rental
+                      ? badge(rental.status)
+                      : '<span class="availability">문의 채팅</span>'}
 
-                  ${count
-                    ? `<b class="room-unread" aria-label="안 읽은 메시지 ${count}개">${count > 99 ? "99+" : count}</b>`
-                    : ""}
+                    ${count
+                      ? `<b class="room-unread" aria-label="안 읽은 메시지 ${count}개">${count > 99 ? "99+" : count}</b>`
+                      : ""}
+                  </div>
+
+                  <p>${item ? escape(item.title) : "대여 전 문의"}</p>
+
+                  <p>${last
+                    ? (last.sender === role ? "나: " : "") + escape(last.text)
+                    : "아직 메시지가 없어요."}</p>
+
+                  <small>
+                    ${rental ? dates(rental.start, rental.end) : ""}
+                    ${time
+                      ? `<time datetime="${time.toISOString()}">
+                          ${localDay(time) === localDay()
+                            ? chatClock.format(time)
+                            : chatDay.format(time)}
+                         </time>`
+                      : ""}
+                  </small>
                 </div>
 
-                <p>${item ? escape(item.title) : "대여 전 문의"}</p>
-
-                <p>${last
-                  ? (last.sender === role ? "나: " : "") + escape(last.text)
-                  : "아직 메시지가 없어요."}</p>
-
-                <small>
-                  ${rental ? dates(rental.start, rental.end) : ""}
-                  ${time
-                    ? `<time datetime="${time.toISOString()}">
-                        ${localDay(time) === localDay()
-                          ? chatClock.format(time)
-                          : chatDay.format(time)}
-                       </time>`
-                    : ""}
-                </small>
-              </div>
-
-              ${item
-                ? image(item, "chat-thumbnail", item.title)
-                : icon("right")}
-            </a>`;
+                ${item ? image(item, "chat-thumbnail", item.title) : ""}
+              </a>
+              <button class="swipe-delete" type="button" data-swipe-action data-action="delete-chat" data-id="${escape(id)}"
+                  aria-label="${escape(partner.name)} · ${escape(item?.title ?? "문의 채팅")} 삭제">
+                ${icon("trash")}<span>삭제</span>
+              </button>
+            </div>`;
         }).join("")
         : `<div class="chat-hub-empty">
              <span class="chat-hub-empty-icon">${icon("chat")}</span>
@@ -687,8 +696,35 @@ export function membershipPage() {
   </div>`;
 }
 
-export function modal(title, content) {
-  return `<header class="dialog-header"><h2 id="dialog-title">${title}</h2><button class="icon-button" data-action="close" aria-label="닫기">${icon("close")}</button></header>${content}`;
+export function noticeList(notices) {
+  if (!notices.length) return `<div class="notice-empty">
+    <span class="notice-symbol">${icon("bell")}</span><p>받은 알림이 없어요.</p>
+  </div>`;
+  return `<div class="notice-list">${notices.map(notice => {
+    const date = Number.isFinite(notice.createdAt) ? new Date(notice.createdAt) : null;
+    const time = date && Number.isFinite(date.getTime())
+      ? `<time datetime="${date.toISOString()}">${localDay(date) === localDay() ? chatClock.format(date) : chatDay.format(date)}</time>`
+      : "";
+    return `<div class="notice-entry swipe-row" data-swipe-row>
+      <a class="notice-link swipe-content" href="#trade/${escape(notice.rentalId)}" data-swipe-content aria-keyshortcuts="ArrowLeft"
+          data-action="notice-open" data-id="${escape(notice.id)}">
+        <span class="notice-symbol">${icon("bell")}</span>
+        <span class="notice-copy"><span>${escape(notice.message)}</span>${time}</span>
+        ${notice.read ? "" : '<span class="notice-unread" aria-label="새 알림"></span>'}
+        ${icon("right")}
+      </a>
+      <button class="swipe-delete" type="button" data-swipe-action data-action="notice-delete" data-id="${escape(notice.id)}"
+          aria-label="${escape(notice.message)} 알림 삭제">${icon("trash")}<span>삭제</span></button>
+    </div>`;
+  }).join("")}</div>`;
+}
+
+export function modal(title, content, actions = "") {
+  const close = `<button class="icon-button" type="button" data-action="close" aria-label="닫기">${icon("close")}</button>`;
+  return `<header class="dialog-header">
+    <h2 id="dialog-title">${title}</h2>
+    ${actions ? `<div class="dialog-header-actions">${actions}${close}</div>` : close}
+  </header>${content}`;
 }
 
 export function missingPage() {
@@ -767,9 +803,7 @@ export function aiRoomPage(session, itemById) {
         ${bubbles || `
           <article class="message">
             <small>렌토 AI</small>
-            <p>안녕하세요! 어떤 물품을 찾고 계세요?
-            용도와 예산을 알려주시면 필요한 물품을
-            추천해 드릴게요.</p>
+            <p>안녕하세요! 어떤 물품을 찾고 계세요? 용도와 예산을 알려주시면 필요한 물품을 추천해 드릴게요.</p>
           </article>
         `}
 

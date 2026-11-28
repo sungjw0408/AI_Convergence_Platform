@@ -48,3 +48,13 @@ export function membershipPanel(uid, plan, listings, rentals, month, escape, dem
     ${active ? activeRentals.filter(r=>!used("pickup",r.id)).map(r=>button("pickup",r.id,title(r.itemId)+" 반납 픽업 신청")).join("") : ""}
     <h3>사용 내역</h3>${history.length ? history.map(a => `<p>${escape(a.month)} · ${escape(a.type === "promote" ? title(a.target)+" 홍보권 사용" : title(rentals.find(r=>r.id===a.target)?.itemId)+" 픽업 · "+(plan.pickupStatus?.[a.target] || "신청 접수"))}</p>`).join("") : "<p>아직 사용 내역이 없어요.</p>"}</section>`;
 }
+
+export function visibleChatMessages(messages = [], deletedThrough) {
+  if (typeof deletedThrough !== "string") return messages;
+  const cutoff = messages.findIndex(message => message.id === deletedThrough);
+  return cutoff < 0 ? messages : messages.slice(cutoff + 1);
+}
+
+export function chatListed(messages, deleted, id) {
+  return !Object.hasOwn(deleted, id) || visibleChatMessages(messages, deleted[id]).length > 0;
+}

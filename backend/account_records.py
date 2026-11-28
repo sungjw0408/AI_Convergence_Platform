@@ -828,10 +828,16 @@ def authorize_updates(root, transaction, uid, updates, policy=None):
         if name == "profiles":
             favorites = record.get("favorites")
             required = {"id", "area", "favorites"}
-            require(record_id == uid and required <= set(record) <= required | {"displayName", "photo"}
+            require(record_id == uid and required <= set(record) <= required | {"displayName", "photo", "chatDeletedThrough"}
                     and isinstance(record["area"], str) and record["area"] in AREAS)
             require(isinstance(favorites, list) and len(favorites) <= 500
                     and all(matches(IDS, item) for item in favorites))
+            if "chatDeletedThrough" in record:
+                deleted = record["chatDeletedThrough"]
+                require(isinstance(deleted, dict) and all(
+                    matches(IDS, room_id) and (message_id is None or matches(IDS, message_id))
+                    for room_id, message_id in deleted.items()
+                ))
             if "displayName" in record:
                 require(text(record["displayName"], PROFILE_NAME_MAX_LENGTH))
                 record["displayName"] = record["displayName"].strip()
@@ -1022,10 +1028,10 @@ def authorize_updates(root, transaction, uid, updates, policy=None):
         elif name == "notices" and current:
             require(
                 current["role"] == uid
-                and record == {
-                    **current,
-                    "read": True,
-                }
+                and (
+                    record == {**current, "read": True}
+                    or record == {**current, "read": True, "dismissed": True}
+                )
             )
 
         # 새 거래 알림

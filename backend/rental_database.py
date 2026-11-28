@@ -164,6 +164,11 @@ def register_database(app, client=None, space=None, account_mode=False, deposit_
         if not uid:
             from rental_lifecycle import validate_feedback_update
             for name, record in updates:
+                if name == "notices" and "dismissed" in record:
+                    current = root.collection(name).document(record["id"]).get(transaction=transaction).to_dict()
+                    actor = request.headers.get("X-Rento-Demo-Actor")
+                    if not current or current.get("role") != actor or record != {**current, "read": True, "dismissed": True}:
+                        raise ForbiddenRecord("이 알림을 삭제할 수 없어요.")
                 if name == "rentals":
                     current = app_fields(root.collection(name).document(record["id"]).get(transaction=transaction).to_dict())
                     if record.get("feedback") != current.get("feedback"):
