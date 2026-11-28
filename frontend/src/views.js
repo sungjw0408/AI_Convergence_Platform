@@ -1,4 +1,5 @@
 import { profileImage } from "./accounts.js";
+import { inquiryPartner } from "./inquiry.js";
 import { depositBlock, depositPolicyLabel, listingDeposit, VALUE_PENDING } from "./listing-pricing.js";
 import { reservationInputs, chargedDays, lifecyclePanel } from "./rental-lifecycle.js?v=team2-compact-4";
 import { comparisonResult } from "./compare.js";
@@ -296,14 +297,36 @@ export function tradePage(rental, item, role, feedback, selectedView, lifecycleM
   </div>`;
 }
 
-const partnerName = (rental, role) =>
-  people[role === rental.renterId ? rental.lenderId : rental.renterId]?.name ?? "거래 상대";
+function chatProfile(id, profiles, fallback = "채팅 상대") {
+  return { id, name: profiles.displayNames?.[id] || people[id]?.name || fallback, photo: profiles.profilePhotos?.[id] };
+}
+
+function rentalChatProfile(rental, role, profiles) {
+  const renter = role === rental.renterId;
+  return chatProfile(renter ? rental.lenderId : rental.renterId, profiles, renter ? "공급자 프로필" : "대여자 프로필");
+}
+
+function chatAvatar(profile) {
+  return `<span class="avatar">${profileImage(profile.photo, escape) || icon("user")}</span>`;
+}
+
+function chatThreadHeader(profile) {
+  const name = escape(profile.name);
+  return `<header class="page-header">
+    <a class="icon-button" href="#chat" aria-label="뒤로">${icon("back")}</a>
+    <a class="chat-thread-profile" href="#person/${encodeURIComponent(profile.id)}" aria-label="${name} 프로필 보기">
+      ${chatAvatar(profile)}
+      <h1>${name}</h1>
+      ${icon("right")}
+    </a>
+  </header>`;
+}
 const chatDay = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" });
 const chatClock = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2-digit" });
 const messageDate = (message) => Number.isFinite(message?.sentAt)
   && Number.isFinite(new Date(message.sentAt).getTime()) ? new Date(message.sentAt) : null;
 
-export function chatPage(rentals, catalog, role, threads, canChat, inquiries = []) {
+export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [], profiles = {}) {
   const conversations = [
     ...rentals
       .filter(r => (r.renterId === role || r.lenderId === role) && canChat(r))
@@ -328,31 +351,23 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
 
   return pageHeader("채팅") + `
     <div class="content chat-list">
-      <p class="page-description chat-description">
-        이웃과 나누는 대화, 더 편안한 거래
-      </p>
-
       ${conversations.length
         ? conversations.map(({id, rental, room, last}) => {
           const item = rental ? catalog(rental.itemId) : null;
 
-          const partnerId = room
-            ? room.participants.find(p => p !== role)
-            : rental.renterId === role
-              ? rental.lenderId
-              : rental.renterId;
-
-          const partner = people[partnerId]?.name ?? "이웃";
+          const partner = room
+            ? chatProfile(inquiryPartner(room, role), profiles)
+            : rentalChatProfile(rental, role, profiles);
           const count = unread(threads[id], role);
           const time = messageDate(last);
 
           return `
             <a class="conversation-row" href="#chat/${escape(id)}">
-              <span class="avatar">${icon("user")}</span>
+              ${chatAvatar(partner)}
 
               <div class="conversation-summary">
                 <div class="conversation-heading">
-                  <strong>${escape(partner)}</strong>
+                  <strong>${escape(partner.name)}</strong>
 
                   ${rental
                     ? badge(rental.status)
@@ -394,9 +409,9 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
     </div>`;
 }
 
-export function inquiryPage(room, messages, role) {
-  const partnerId = room.participants.find(p => p !== role);
-  const partner = escape(people[partnerId]?.name ?? "이웃");
+export function inquiryPage(room, messages, role, profiles = {}) {
+  const profile = chatProfile(inquiryPartner(room, role), profiles);
+  const partner = escape(profile.name);
 
   let lastDay = null;
 
@@ -427,22 +442,8 @@ export function inquiryPage(room, messages, role) {
       </div>`;
   }).join("");
 
-  return pageHeader(partner, "#chat") + `
+  return chatThreadHeader(profile) + `
     <div class="content stack conversation-content">
-
-      <a class="conversation-item"
-         href="#person/${encodeURIComponent(partnerId)}">
-
-        <span class="avatar">${icon("user")}</span>
-
-        <div>
-          <strong>${partner}</strong>
-          <p>상대방 프로필 보기</p>
-        </div>
-
-        ${icon("right")}
-      </a>
-
       <div class="messages chat-history"
            role="log"
            aria-label="대화 내역"
@@ -485,8 +486,9 @@ export function inquiryPage(room, messages, role) {
     </div>`;
 }
 
-export function conversationPage(rental, item, messages, role) {
-  const partner = escape(partnerName(rental, role));
+export function conversationPage(rental, item, messages, role, profiles = {}) {
+  const profile = rentalChatProfile(rental, role, profiles);
+  const partner = escape(profile.name);
   let lastDay = null;
 
   const bubbles = messages.map((message, index) => {
@@ -513,7 +515,7 @@ export function conversationPage(rental, item, messages, role) {
       </div>`;
   }).join("");
 
-  return pageHeader(escape(item.title), "#chat") + `
+  return chatThreadHeader(profile) + `
     <div class="content stack conversation-content">
 
       <a class="conversation-item" href="#trade/${escape(rental.id)}">
@@ -529,7 +531,7 @@ export function conversationPage(rental, item, messages, role) {
            role="log"
            aria-label="대화 내역"
            tabindex="0">
-        ${bubbles || empty("첫 메시지를 보내보세요", "이웃과 대화를 시작해 보세요.")}
+        ${bubbles || empty("첫 메시지를 보내보세요", "거래에 관해 궁금한 점을 물어보세요.")}
       </div>
 
       <form class="compose"

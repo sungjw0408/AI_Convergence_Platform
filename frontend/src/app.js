@@ -30,7 +30,6 @@ import { canReview, reputation, seat, unread, quota, membershipPanel } from "./c
 import {
   findInquiry,
   createInquiry,
-  inquiryPartner,
   isInquiryParty
 } from "./inquiry.js";
 const screen = document.querySelector("#screen");
@@ -291,6 +290,7 @@ function render() {
   if (page === "compare") { location.replace("#rentals"); return; }
   if (page === "photo-evaluation") { location.replace("#dev/photo-evaluation"); return; }
   const role = state.role;
+  const chatProfiles = { displayNames: state.displayNames, profilePhotos: state.profilePhotos };
   let content;
   if (page === "home") content = home({
     area: state.area, ...filters, rows: homeRows(),
@@ -313,7 +313,8 @@ function render() {
       role,
       state.messages,
       chatAllowed,
-      state.inquiries
+      state.inquiries,
+      chatProfiles
     );
   } else if (page === "chat") {
     const room = inquiryById(id);
@@ -323,14 +324,16 @@ function render() {
       content = inquiryPage(
         room,
         state.messages[id] ?? [],
-        role
+        role,
+        chatProfiles
       );
     } else if (isParty(rental) && chatAllowed(rental)) {
       content = conversationPage(
         rental,
         itemById(rental.itemId),
         state.messages[id] ?? [],
-        role
+        role,
+        chatProfiles
       );
     }
   } else if (page === "profile") {

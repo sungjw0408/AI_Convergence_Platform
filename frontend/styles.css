@@ -1788,3 +1788,7 @@ details > label { display: grid; gap: 6px; margin-block: 8px; }
 .payment-history li.failed strong { font-size: 11px; font-weight: 400; }
 .lifecycle-actions { border-top: 1px solid #e7ece4; padding-top: 14px; }
 .lifecycle-actions .button { flex: 1 1 140px; }
+
+.chat-thread-profile { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.chat-thread-profile .avatar { width: 34px; height: 34px; }
+.chat-thread-profile > svg { flex-shrink: 0; width: 16px; color: var(--muted); }
