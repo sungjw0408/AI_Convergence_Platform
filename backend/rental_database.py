@@ -2,9 +2,16 @@
 import json
 import os
 import re
+import sys
 from urllib.parse import urlsplit
 
 from flask import abort, g, jsonify, request
+
+from listing_visibility import public_listing
+
+# Resolve through macOS so Firestore gRPC follows the active system DNS.
+if sys.platform == "darwin":
+    os.environ.setdefault("GRPC_DNS_RESOLVER", "native")
 
 COLLECTIONS = (
     "listings",
@@ -61,13 +68,14 @@ def validated_changes(data, collections=COLLECTIONS):
     return updates
 
 
-def register_database(app, client=None, space=None, account_mode=False):
+def register_database(app, client=None, space=None, account_mode=False, deposit_policy=None):
     project = os.environ.get("RENTO_FIREBASE_PROJECT")
     if client is None and not project:
         return False
 
     from google.api_core.exceptions import GoogleAPICallError
     from google.cloud import firestore
+    from google.cloud.firestore_v1.base_query import FieldFilter
 
     if client is None:
         if project.startswith("demo-") and not os.environ.get("FIRESTORE_EMULATOR_HOST"):
@@ -78,6 +86,39 @@ def register_database(app, client=None, space=None, account_mode=False):
         from account_records import ForbiddenRecord, account_documents, authorize_updates
     else:
         ForbiddenRecord = PermissionError
+
+    def price_listings(category, uid):
+        listings = (
+            root.collection("listings")
+            .where(filter=FieldFilter("category", "==", category))
+            .select(["title", "owner", "price", "neighborhood", "pricingContext.modelName",
+                     "pricingContext.condition", "itemValue", "isDemo", "visibility"])
+        )
+        try:
+            remaining = 40
+            for doc in listings.stream(timeout=8):
+                listing = doc.to_dict()
+                if public_listing(listing) and (uid is None or listing.get("owner") != uid):
+                    yield {**listing, "id": doc.id}
+                    remaining -= 1
+                    if remaining == 0:
+                        break
+        except GoogleAPICallError:
+            raise RuntimeError("비교 자료를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.") from None
+
+    app.extensions["rento_price_listings"] = price_listings
+
+    if account_mode:
+        @firestore.transactional
+        def create_profile(transaction, uid, profile):
+            reference = root.collection("profiles").document(uid)
+            if reference.get(transaction=transaction).exists:
+                return
+            meta = root.get(transaction=transaction).to_dict() or {}
+            transaction.set(reference, {"id": uid, "favorites": [], **profile})
+            transaction.set(root, {"revision": meta.get("revision", 0) + 1}, merge=True)
+
+        app.extensions["rento_create_profile"] = lambda uid, profile: create_profile(client.transaction(), uid, profile)
 
     @firestore.transactional
     def read(transaction, uid, since):
@@ -99,7 +140,7 @@ def register_database(app, client=None, space=None, account_mode=False):
         if meta.get("revision", 0) != version:
             raise RevisionConflict()
         if uid:
-            updates = authorize_updates(root, transaction, uid, updates)
+            updates = authorize_updates(root, transaction, uid, updates, deposit_policy)
         for name, record in updates:
             transaction.set(root.collection(name).document(record["id"]), stored_fields(record))
         transaction.set(root, {"revision": version + 1})

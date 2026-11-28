@@ -2,6 +2,8 @@
 from datetime import datetime, timezone, timedelta
 from time import time
 
+from listing_visibility import public_listing
+
 WEEK = 7 * 86400000
 
 
@@ -64,7 +66,8 @@ def valid_use(current, record, uid, root, transaction):
     if action["type"] == "promote":
         item = root.collection("listings").document(target).get(transaction=transaction).to_dict()
         used = sum(a["type"] == "promote" and a["month"] == month for a in previous)
-        return item and item.get("owner") == uid and used < current.get("grants", {}).get(month, 0)
+        return (item and public_listing(item) and item.get("owner") == uid
+                and used < current.get("grants", {}).get(month, 0))
     if action["type"] == "pickup":
         rental = root.collection("rentals").document(target).get(transaction=transaction).to_dict()
         return (rental and rental.get("renterId") == uid and rental.get("status") == "active"

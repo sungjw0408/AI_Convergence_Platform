@@ -1,3 +1,4 @@
+import { itemValueFrom, MAX_DAILY_WON, MAX_VALUE_WON, wonInput } from "./listing-pricing.js";
 import { categories, localDay, neighborhoods, rentalDays } from "./model.js?v=rento-home-5-ren";
 import { hasOnlyListingCameraPhotos, missingListingViews } from "./listing-photos.js";
 
@@ -15,9 +16,12 @@ export function validateListingStep(draft, step) {
     if (!hasOnlyListingCameraPhotos(draft)) return { message: "앱 카메라로 각 부위를 다시 촬영해 주세요." };
     if (draft.photoMode !== "review") return { message: "촬영한 사진을 전체 확인해 주세요." };
   } else if (step === 2) {
-    const price = Number(fields.price), deposit = Number(fields.deposit);
-    if (!fields.price.trim() || !Number.isSafeInteger(price) || price < 0 || price > 10000000) return { field: "price", message: "하루 대여료를 0원부터 1,000만 원까지 1원 단위로 입력해 주세요." };
-    if (!Number.isSafeInteger(deposit) || deposit < 0 || deposit > 10000000) return { field: "deposit", message: "보증금은 0원부터 1,000만 원까지 1원 단위로 입력해 주세요." };
+    if (wonInput(fields.price, MAX_DAILY_WON) === null) return { field: "price", message: "하루 대여료를 0원부터 1,000만 원까지 1원 단위로 입력해 주세요." };
+    if (wonInput(fields.valueWon, MAX_VALUE_WON, 1) === null) return { field: "valueWon", message: "현재 중고 가액을 1원부터 1억 원까지 입력해 주세요." };
+    if (!itemValueFrom(fields)) return { field: "valueEvidence", message: "가액을 판단한 근거를 500자 이내로 입력해 주세요." };
+    if (fields.purchaseMonth && (!/^\d{4}-(0[1-9]|1[0-2])$/.test(fields.purchaseMonth) || fields.purchaseMonth > localDay().slice(0, 7))) {
+      return { field: "purchaseMonth", message: "구매 시기는 이번 달 이내로 입력해 주세요." };
+    }
     if ((fields.start || fields.end) && (!(rentalDays(fields.start, fields.end) >= 1) || fields.start < localDay())) return { field: "start", message: "대여 가능 기간의 시작일과 종료일을 확인해 주세요." };
   }
   return null;

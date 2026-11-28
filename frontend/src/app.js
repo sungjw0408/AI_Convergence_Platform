@@ -1,4 +1,8 @@
-import { accountPage, accountRequest } from "./accounts.js";
+import { depositBlock, depositQuote, itemValueFrom, rentalDepositSnapshot } from "./listing-pricing.js";
+import { getListingDraft, getPriceRecommendation, pricingContextFrom } from "./listing-advice.js";
+import { rankListings, recommendationCandidates } from "./listing-recommendations.js";
+import { depositPreview, listingEditForm, priceRecommendationForm, priceRecommendationResult } from "./listing-registration-view.js";
+import { accountPage, accountRequest, profileEditForm, profileImage, readProfileSettings } from "./accounts.js";
 import { connectRentalDatabase } from "./rental-database.js";
 import { newAIConversation, sendAIMessage } from "./ai-room.js";
 import { comparePhotos } from "./compare.js";
@@ -13,7 +17,7 @@ import { itemGallery, listingPhotoPanel } from "./listing-photo-view.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import {
   catalog, categories, findAvailability, initialState, localDay, neighborhoods, people, readState,
-  rentalDays, suggestedFields, writeState,
+  publicListing, rentalDays, writeState,
 } from "./model.js?v=rento-home-5-ren";
 import {
   aiRoomPage, chatPage, comparePage, conversationPage, inquiryPage, dateInputs, escape, home, itemPage, listingRows,
@@ -34,6 +38,7 @@ const dialog = document.querySelector("#dialog");
 const toast = document.querySelector("#toast");
 const databaseMode = document.querySelector('meta[name="rento-database"]')?.content;
 const accountMode = databaseMode === "accounts";
+const depositPolicy = JSON.parse(document.querySelector('meta[name="rento-deposit-policy"]')?.content ?? "null");
 const preferencesKey = "rento-firestore-preferences-v1";
 const state = accountMode ? initialState() : readState(databaseMode ? preferencesKey : undefined);
 let account = null;
@@ -46,7 +51,10 @@ function databaseError(error) {
   const notice = document.createElement("p");
   notice.className = "notice";
   notice.setAttribute("role", "alert");
-  notice.textContent = error.message + " DB 내용을 다시 불러온 뒤 변경 사항을 확인해 주세요.";
+  const message = error.name === "TimeoutError"
+    ? "Firebase 응답이 늦어 요청을 완료하지 못했어요."
+    : error.message;
+  notice.textContent = message + " DB 내용을 다시 불러온 뒤 변경 사항을 확인해 주세요.";
   const retry = document.createElement("button");
   retry.className = "button secondary";
   retry.textContent = "다시 불러오기";
@@ -74,6 +82,7 @@ const comparisonFeedback = new Map();
 const evidenceDrafts = new Map();
 const inspectionViews = new Map();
 const listingDrafts = new Map();
+const listingPriceResults = new WeakMap();
 const gallerySelections = new Map();
 const listingSavedSources = new WeakMap();
 function listingDraft(role = state.role) {
@@ -119,6 +128,13 @@ async function analyzeTrade(rental, force = false) {
 const allItems = () => accountMode ? state.listings : [...catalog, ...state.listings];
 const itemById = (id) => allItems().find((item) => item.id === id);
 const rentalById = (id) => state.rentals.find((rental) => rental.id === id);
+const listedItems = () => allItems().filter(publicListing);
+const myListings = () => state.listings.filter((item) => item.owner === state.role && item.visibility !== "deleted");
+
+function visibleListing(id) {
+  const item = itemById(id);
+  if (item && (publicListing(item) || (item.visibility === "private" && item.owner === state.role))) return item;
+}
 
 state.inquiries ??= [];
 
@@ -151,7 +167,7 @@ async function startInquiry(partnerId) {
     let room = findInquiry(state.inquiries, role, partnerId);
 
     if (!room) {
-      if (!allItems().some(item => item.owner === partnerId)) {
+      if (!listedItems().some(item => item.owner === partnerId)) {
         showToast("등록된 물품이 없는 상대예요.");
         return;
       }
@@ -200,44 +216,73 @@ function save() {
   if (!writeState(state)) showToast("브라우저 저장 공간이 부족해요. 현재 화면에서 계속 이용할 수 있어요.");
 }
 
+async function saveListingChange(item, changes, message) {
+  if (Object.keys(changes).every((key) => item[key] === changes[key])) return true;
+  const index = state.listings.indexOf(item);
+  const updated = { ...item, ...changes };
+  state.listings[index] = updated;
+  const saved = databaseMode ? await saveToDatabase() : writeState(state);
+  if (!saved) {
+    if (state.listings[index] === updated) state.listings[index] = item;
+    if (!databaseMode) showToast("변경 사항을 저장하지 못했어요.");
+    return false;
+  }
+  if (route()[0] === "my-listings") render();
+  showToast(message);
+  return true;
+}
+
+async function setListingVisibility(id, visibility) {
+  const item = myListings().find((listing) => listing.id === id);
+  if (!item || (item.visibility ?? "public") === visibility) return false;
+  const message = {
+    private: "물품을 비공개로 전환했어요.",
+    public: "물품을 다시 공개했어요.",
+    deleted: "물품을 삭제했어요.",
+  };
+  return saveListingChange(item, { visibility }, message[visibility]);
+}
+
 function announce(role, rental, message) {
   state.notices.unshift({ id: newId(), createdAt: Date.now(), role, rentalId: rental.id, message, read: false });
 }
 
+const blockedRentals = () => [...state.rentals, ...(state.blockedPeriods ?? [])];
+
 function availabilityLabel(item, filtered) {
+  if (item.visibility === "private") return "비공개";
+  if (item.owner === state.role) return "내 등록 물품";
+  const blocked = depositBlock(item, depositPolicy, accountMode);
+  if (blocked) return blocked;
+  if (state.role === "admin") return "관리자 열람";
   if (filtered && filters.date.start) return "선택한 날짜 대여 가능";
   const today = localDay();
-  const error = findAvailability(item, today, today, state.rentals);
+  const error = findAvailability(item, today, today, blockedRentals());
   if (!error) return "오늘 대여 가능";
-  if (item.weekends && error.startsWith("이 물품")) return "주말 대여 가능";
+  if (item.weekends && error.startsWith("이 물품")) return "주말 대여 전용";
   if (item.availableFrom && item.availableFrom > today) return "날짜 확인";
   if (item.availableTo && item.availableTo < today) return "대여 기간 종료";
   return "예약 중";
 }
 
-function filteredListings(criteria = filters) {
-  const search = criteria.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  let items = allItems().filter((item) => {
-    const text = [item.title, item.category, item.neighborhood, item.description].join(" ").toLowerCase();
-    return (criteria.category === "전체" || item.category === criteria.category)
-      && search.every((term) => text.includes(term))
-      && (criteria.maxPrice === null || item.price <= criteria.maxPrice)
-      && (!criteria.date.start || !findAvailability(item, criteria.date.start, criteria.date.end, state.rentals));
-  });
-  if (state.area !== "죽전동") {
-    items = items.sort((a, b) => Number(b.neighborhood === state.area) - Number(a.neighborhood === state.area));
-  }
-  return items;
-}
+const recommendationContext = () => ({ items: allItems(), rentals: state.rentals,
+  availability: blockedRentals(), uid: state.role, area: state.area, isFavorite, filters, policy: depositPolicy, requireValue: accountMode });
+const rowsFor = (items, managing = false) =>
+  listingRows(items, isFavorite, (item) => availabilityLabel(item, false), undefined, state.displayNames, managing, state.profilePhotos);
 
-const rowsFor = (items, filtered = false) => listingRows(items, isFavorite, (item) => availabilityLabel(item, filtered));
+function homeRows() {
+  const ranked = rankListings(recommendationContext());
+  const reasons = new Map(ranked.filter((row) => row.available).map((row) => [row.item.id, row.reasons]));
+  return listingRows(ranked.map((row) => row.item), isFavorite, (item) => availabilityLabel(item, true),
+    reasons, state.displayNames, false, state.profilePhotos);
+}
 
 function render() {
   if (databaseFailed) return;
   const [page, id] = route();
   if (accountMode && !account) {
     navigation.replaceChildren();
-    screen.innerHTML = accountPage(page === "signup");
+    screen.innerHTML = accountPage(page === "signup", escape);
     return;
   }
   if (page === "compare") { location.replace("#rentals"); return; }
@@ -245,12 +290,15 @@ function render() {
   const role = state.role;
   let content;
   if (page === "home") content = home({
-    area: state.area, ...filters, rows: rowsFor(filteredListings(), true),
+    area: state.area, ...filters, rows: homeRows(),
     unread: state.notices.some((notice) => notice.role === role && !notice.read),
   });
-  else if (page === "assistant") content = aiRoomPage(assistantSession(), itemById, assistantSession().criteria ?? filters);
-  else if (page === "item" && itemById(id)) content = itemPage(itemById(id), role, filters.date, gallerySelections.get(id));
-  else if (page === "new") content = registerPage(role, state.area, listingDraft());
+  else if (page === "assistant") content = aiRoomPage(assistantSession(), visibleListing);
+  else if (page === "item") {
+    const item = visibleListing(id);
+    if (item) content = itemPage(item, role, filters.date, gallerySelections.get(id), depositPolicy, accountMode);
+  }
+  else if (page === "new") content = registerPage(role, state.area, listingDraft(), depositPolicy);
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
   else if (page === "trade") {
     const rental = rentalById(id);
@@ -282,15 +330,19 @@ function render() {
         role
       );
     }
-  } else if (page === "profile") content = profilePage(role, allItems().filter((item) => isFavorite(item.id)).length,
-    allItems().filter((item) => item.owner === role).length, account);
+  } else if (page === "profile") {
+    content = profilePage(role, listedItems().filter((item) => isFavorite(item.id)).length,
+      myListings().length, account, ownProfile());
+    if (id === "setup") content += '<p class="notice" role="status">가입을 완료했어요. 프로필 수정에서 이름, 거주 지역과 사진을 저장해 주세요.</p>';
+  }
   else if (!accountMode && page === "dev" && id === "compare") content = comparePage(demo);
   else if (!accountMode && page === "dev" && id === "photo-evaluation") content = evaluationPage(evaluation, pageHeader, escape);
-  else if (page === "membership") content = membershipPage() + membershipPanel(role, state.memberships[role], allItems(), state.rentals, billingMonth(), escape, !accountMode);
+  else if (page === "membership") content = membershipPage() + membershipPanel(role, state.memberships[role], listedItems(), state.rentals, billingMonth(), escape, !accountMode);
   else if (page === "saved" || page === "my-listings") {
-    const items = allItems().filter((item) => page === "saved" ? isFavorite(item.id) : item.owner === role);
-    const title = page === "saved" ? "관심 물품" : "내가 올린 물품";
-    content = pageHeader(title, "#profile") + `<div class="content">${items.length ? rowsFor(items)
+    const managing = page === "my-listings";
+    const items = managing ? myListings() : listedItems().filter((item) => isFavorite(item.id));
+    const title = managing ? "내가 올린 물품" : "관심 물품";
+    content = pageHeader(title, "#profile") + `<div class="content">${items.length ? rowsFor(items, managing)
       : `<p class="notice">${page === "saved" ? "아직 관심 물품이 없어요." : "아직 올린 물품이 없어요."}</p>`}</div>`;
   }
    if ((page === "profile" || page === "person") &&
@@ -306,11 +358,9 @@ function render() {
         / stats.reviews.length).toFixed(1)
       : "평가 전";
 
-    const name = people[uid]?.name ?? "이웃";
+    const name = state.displayNames?.[uid] || people[uid]?.name || "이웃";
 
-    const ownerItems = allItems().filter(
-      item => item.owner === uid
-    );
+    const ownerItems = listedItems().filter((item) => item.owner === uid);
 
     const reputationHTML = `
       <div class="person-stats">
@@ -360,7 +410,7 @@ function render() {
           <section class="person-card">
 
             <div class="person-avatar">
-              ${icon("user")}
+              ${profileImage(state.profilePhotos?.[uid], escape) || icon("user")}
             </div>
 
             <h2>${escape(name)}</h2>
@@ -466,6 +516,12 @@ function chatAllowed(rental) {
   return ["confirmed", "handover", "active", "checking", "disputed", "complete"].includes(rental.status);
 }
 
+function ownProfile() {
+  const uid = state.role;
+  return { displayName: state.displayNames?.[uid] ?? account?.displayName,
+    area: state.area, photo: state.profilePhotos?.[uid] };
+}
+
 function navigate(hash) {
   if (dialog.open) dialog.close();
   if (location.hash === hash) render();
@@ -493,7 +549,11 @@ async function tradeAction(action) {
   const borrows = state.role === rental.renterId;
   const tradeItem = itemById(rental.itemId);
   if (action === "confirm" && owns && rental.status === "pending") {
-    const error = findAvailability(tradeItem, rental.start, rental.end, state.rentals, rental.id);
+    if (accountMode && (!rental.itemValue || !rental.depositPolicy)) {
+      showDialog("이 신청은 승인할 수 없어요", '<p class="notice">가액과 보증금 기준이 저장되지 않았어요. 물품 상세에서 가액을 등록하고 보증금 정책이 적용된 뒤 다시 신청해 주세요.</p>');
+      return;
+    }
+    const error = findAvailability(tradeItem, rental.start, rental.end, blockedRentals(), rental.id);
     if (error) {
       showDialog("예약을 확정할 수 없어요", `<p class="notice">${escape(error)}</p>`);
       return;
@@ -592,8 +652,17 @@ function showListingStep(step, error) {
   const form = screen.querySelector('[data-form="register"]');
   if (error) {
     formError(form, error.message);
-    (form.elements[error.field] || form.querySelector(".form-error")).focus();
+    const depositButton = ["valueWon", "valueEvidence"].includes(error.field)
+      && form.querySelector('[data-action="listing-price-recommend"][data-id="value"]');
+    (form.elements[error.field] || depositButton || form.querySelector(".form-error")).focus();
   } else screen.querySelector("#registration-stage-title")?.focus({ preventScroll: true });
+}
+
+function applyListingTerms(draft, fields, kind) {
+  Object.assign(draft.fields, fields);
+  dialog.close();
+  render();
+  screen.querySelector(`[data-action="listing-price-recommend"][data-id="${kind}"]`)?.focus({ preventScroll: true });
 }
 
 function updateListingPlan(form) {
@@ -751,7 +820,7 @@ async function openNotices() {
 }
 
 function refreshHomeRows() {
-  document.querySelector("#listings").innerHTML = rowsFor(filteredListings(), true);
+  document.querySelector("#listings").innerHTML = homeRows();
 }
 
 const assistantSessions = new Map();
@@ -760,20 +829,17 @@ function assistantSession(role = state.role) {
   return assistantSessions.get(role);
 }
 
-function assistantItems() {
-  const criteria = assistantSession().criteria ?? filters;
-  return filteredListings(criteria).filter(item => item.owner !== state.role).map(item => ({
-    id: item.id, title: item.title, category: item.category, neighborhood: item.neighborhood,
-    price: item.price, description: item.description ?? "",
-    availability: criteria.date.start ? criteria.date.start + " ~ " + criteria.date.end + " 대여 가능" : availabilityLabel(item, false),
-  }));
-}
-
 async function sendAssistant() {
   const role = state.role, session = assistantSession(role);
   if (session.busy) return;
-  const items = assistantItems();
-  if (!items.length) { session.error = "조건에 맞는 물품이 없어요. 날짜나 예산을 조정해 주세요."; render(); return; }
+  const items = recommendationCandidates(recommendationContext());
+  if (!items.length) {
+    session.error = accountMode && !depositPolicy && allItems().some((item) => item.owner !== role)
+      ? "보증금 정책이 결정되면 대여 가능한 물품을 추천할 수 있어요."
+      : "조건에 맞는 물품이 없어요. 날짜나 예산을 조정해 주세요.";
+    render();
+    return;
+  }
   const request = sendAIMessage(session, items, localDay());
   render();
   await request;
@@ -806,9 +872,34 @@ document.addEventListener("click", async (event) => {
   if (["demo-subscription","demo-grant","promote","pickup"].includes(action)) {
     await benefitAction(action,id); return;
   }
+  if (action === "edit-profile") {
+    if (account && route()[0] === "profile") showDialog("프로필 수정", profileEditForm(ownProfile(), escape));
+    return;
+  }
+  if (action === "edit-listing" || action === "manage-listing") {
+    const item = myListings().find((listing) => listing.id === id);
+    if (!item || route()[0] !== "my-listings") return;
+    if (action === "edit-listing") {
+      showDialog("물품 정보 수정", listingEditForm(item, escape));
+      return;
+    }
+    const { visibility } = target.dataset;
+    if (visibility === "deleted") {
+      showDialog("물품 삭제", `<form data-form="listing-delete" data-id="${escape(id)}" class="form-card plain">
+        <p>‘${escape(item.title)}’을 삭제할까요? 기존 대여 거래는 내역에 남아요.</p>
+        <p class="form-error" role="alert" hidden></p>
+        <button class="button primary" type="submit">물품 삭제</button>
+      </form>`);
+    } else if (visibility === "private" || visibility === "public") {
+      target.disabled = true;
+      try { await setListingVisibility(id, visibility); }
+      finally { target.disabled = false; }
+    }
+    return;
+  }
   if (action.startsWith("listing-")) {
     if (["listing-gallery", "listing-photo-enlarge"].includes(action)) {
-      const item = itemById(route()[1]);
+      const item = visibleListing(route()[1]);
       if (!item) return;
       const photos = item.photos?.length ? item.photos : [{ id: "legacy", source: item.image, label: item.title }];
       const photo = photos.find((p) => p.id === id);
@@ -819,10 +910,29 @@ document.addEventListener("click", async (event) => {
       } else showDialog(photo.label || item.title, `<img class="listing-enlarged" src="${escape(photoUrl(photo.source))}" alt="${escape(photo.label || item.title)}">`);
       return;
     }
-    const form = target.form || screen.querySelector('[data-form="register"]');
+    const form = target.form?.dataset.form === "register" ? target.form : screen.querySelector('[data-form="register"]');
     if (form?.dataset.form !== "register" || state.role === "admin") return;
     const draft = rememberListingFields(form);
     if (draft.busy) return;
+    if (action === "listing-price-recommend" && draft.step === 2) {
+      const heading = id === "value" ? "보증금 렌토 추천" : "하루 대여료 렌토 추천";
+      showDialog(heading, priceRecommendationForm(id, draft.fields, depositPolicy, escape));
+      return;
+    }
+    if (action === "listing-apply-price" && draft.step === 2 && dialog.open) {
+      const result = listingPriceResults.get(target.form);
+      if (!result?.amountWon) return;
+      const kind = target.form.dataset.id;
+      const details = pricingContextFrom(Object.fromEntries(new FormData(target.form)));
+      if (kind === "value") {
+        const sources = result.references.slice(0, 3).map((ref) => `${ref.url} (${ref.amountWon}원)`);
+        const valueEvidence = `렌토 비교 중고 가액 · ${sources.join(" · ")}`.slice(0, 500);
+        applyListingTerms(draft, { ...details, valueWon: String(result.amountWon), valueEvidence }, kind);
+      } else {
+        applyListingTerms(draft, { ...details, price: String(result.amountWon) }, kind);
+      }
+      return;
+    }
     if (action === "listing-prev") { showListingStep(Math.max(0, draft.step - 1)); return; }
     if (action === "listing-review-photos") {
       if (dialog.open) dialog.close();
@@ -906,7 +1016,10 @@ document.addEventListener("click", async (event) => {
     const saving = save();
     if (saving && !await saving) return;
     if (route()[0] === "saved") render();
-    else {
+    else if (route()[0] === "home") {
+      refreshHomeRows();
+      screen.querySelector(`[data-action="favorite"][data-id="${id}"]`)?.focus();
+    } else {
       target.classList.toggle("selected", selected);
       target.setAttribute("aria-pressed", String(selected));
     }
@@ -932,29 +1045,52 @@ document.addEventListener("click", async (event) => {
     render();
     screen.querySelector(`[data-action="direction"][data-id="${id}"]`).focus();
   } else if (action === "trade-action") await tradeAction(id);
-  else if (action === "draft") {
+  else if (["draft", "apply-category", "apply-draft"].includes(action)) {
     const form = target.form;
+    if (!form?.isConnected) return;
     const draft = rememberListingFields(form);
     const title = draft.fields.title.trim();
-    if (!title) {
-      formError(form, "물품명을 먼저 입력해 주세요.");
-      return;
+    if (action === "draft") {
+      if (!title) { formError(form, "물품명을 먼저 입력해 주세요."); return; }
+      if (draft.adviceBusy) return;
+      draft.adviceBusy = true;
+      target.disabled = true;
+      formError(form, "");
+      try {
+        const result = await getListingDraft(draft.fields);
+        if (!form.isConnected || draft.fields.title.trim() !== title) return;
+        draft.advice = { ...result, title };
+        draft.adviceBusy = false;
+        showListingStep(draft.step);
+      } finally {
+        draft.adviceBusy = false;
+        target.disabled = false;
+      }
+    } else if (action === "apply-category" || action === "apply-draft") {
+      if (draft.advice?.title !== title) return;
+      if (action === "apply-category" && draft.advice.category) draft.fields.category = draft.advice.category;
+      if (action === "apply-draft") draft.fields.description = draft.advice.description;
+      syncListingPlan(draft);
+      showListingStep(draft.step);
     }
-    formError(form, "");
-    const suggestion = suggestedFields(title);
-    draft.fields.category = suggestion.category;
-    if (!draft.fields.price) draft.fields.price = String(suggestion.price);
-    if (!draft.fields.description.trim()) {
-      draft.fields.description = `${title}을(를) 빌려드려요. 물품 상태와 구성품을 적어주세요.`;
-    }
-    syncListingPlan(draft);
-    showListingStep(draft.step);
-    showToast("예시 제안을 채웠어요. 게시 전에 확인해 주세요.");
   }
 });
 
 document.addEventListener("input", (event) => {
-  if (event.target.form?.dataset.form === "register") rememberListingFields(event.target.form);
+  const pricingForm = event.target.form;
+  if (pricingForm?.dataset.form === "register") rememberListingFields(pricingForm);
+  if (pricingForm?.dataset.form === "listing-price-advice") {
+    listingPriceResults.delete(pricingForm);
+    pricingForm.querySelector(".listing-price-output").replaceChildren();
+    formError(pricingForm, "");
+  }
+  if (["listing-valuation", "listing-deposit-basis"].includes(pricingForm?.dataset.form)) {
+    const preview = pricingForm.querySelector("#deposit-preview");
+    if (preview) {
+      const { valueWon, valueEvidence } = pricingForm.elements;
+      preview.outerHTML = depositPreview({ valueWon: valueWon.value, valueEvidence: valueEvidence.value }, depositPolicy, escape);
+    }
+  }
   if (event.target.name === "condition-note" && ["handoff", "return", "return-update"].includes(event.target.form?.dataset.form)) {
     const rental = rentalById(event.target.form.dataset.id);
     if (rental) evidenceDraft(event.target.form.dataset.form, rental).note = event.target.value;
@@ -964,14 +1100,15 @@ document.addEventListener("input", (event) => {
     refreshHomeRows();
   }
   const form = event.target.form;
-  if ((event.target.name === "start" || event.target.name === "end") && form?.elements.end) {
+  if ((event.target.name === "start" || event.target.name === "end") && form?.elements.end
+      && form.dataset.form !== "listing-edit") {
     const start = form.elements.start.value;
     const end = form.elements.end.value;
     form.elements.end.min = start || localDay();
     if (start && end && end < start) form.elements.end.value = start;
     if (form.dataset.form === "request") {
       const item = itemById(form.dataset.id);
-      form.querySelector("#estimate").textContent = rentalEstimate(item, start, form.elements.end.value);
+      form.querySelector("#estimate").textContent = rentalEstimate(item, start, form.elements.end.value, depositPolicy);
       formError(form, "");
     }
   }
@@ -1060,8 +1197,10 @@ async function submit(form) {
   const { form: kind, id } = form.dataset;
   const fields = new FormData(form);
   if (accountMode && (kind === "login" || kind === "signup")) {
-    await accountRequest(kind, { email: fields.get("email"), password: fields.get("password") });
-    location.replace(location.pathname + "#home");
+    const credentials = { email: fields.get("email"), password: fields.get("password") };
+    if (kind === "signup") credentials.profile = await readProfileSettings(fields);
+    const result = await accountRequest(kind, credentials);
+    location.replace(location.pathname + (result.profileSaved === false ? "#profile/setup" : "#home"));
     location.reload();
     return;
   }
@@ -1072,6 +1211,23 @@ async function submit(form) {
     return;
   }
   if (accountMode && !account) return;
+  if (kind === "edit-profile") {
+    if (!account || !dialog.open || !dialog.contains(form) || route()[0] !== "profile") return;
+    const details = await readProfileSettings(fields, state.profilePhotos?.[state.role]);
+    if (!dialog.open || !dialog.contains(form) || route()[0] !== "profile") return;
+    const previous = { area: state.area, displayNames: state.displayNames, profilePhotos: state.profilePhotos };
+    state.area = details.area;
+    state.displayNames = { ...state.displayNames, [state.role]: details.displayName };
+    state.profilePhotos = { ...state.profilePhotos, [state.role]: details.photo };
+    if (!await saveToDatabase()) {
+      Object.assign(state, previous);
+      return;
+    }
+    if (dialog.contains(form)) dialog.close();
+    if (route()[0] === "profile") navigate("#profile");
+    showToast("프로필을 저장했어요.");
+    return;
+  }
   const date = { start: fields.get("start"), end: fields.get("end") };
 
   if (kind === "compare-demo") {
@@ -1105,22 +1261,116 @@ async function submit(form) {
     return;
   }
 
-    if (kind === "ai-room") {
+  if (kind === "ai-room") {
     assistantSession().draft = fields.get("question") ?? "";
-    assistantSession().criteria = {
-      ...filters,
-      date: {},
-      maxPrice: null
-    };
-
     await sendAssistant();
+    return;
+  }
+
+  if (kind === "listing-price-advice" || kind === "listing-deposit-basis") {
+    const mainForm = screen.querySelector('[data-form="register"]');
+    if (!mainForm || !dialog.open || route()[0] !== "new") return;
+    const draft = rememberListingFields(mainForm);
+    if (draft.step !== 2 || draft.busy) return;
+
+    if (kind === "listing-deposit-basis") {
+      const value = itemValueFrom({ valueWon: fields.get("valueWon"), valueEvidence: fields.get("valueEvidence") });
+      if (!value) { formError(form, "현재 중고 가액과 근거를 확인해 주세요."); return; }
+      applyListingTerms(draft, { valueWon: String(value.amountWon), valueEvidence: value.evidence }, "value");
+      return;
+    }
+
+    const output = form.querySelector(".listing-price-output");
+    const formFields = Object.fromEntries(fields);
+    const fingerprint = JSON.stringify(formFields);
+    const mode = form.dataset.id;
+    formError(form, "");
+    listingPriceResults.delete(form);
+    output.innerHTML = `<p class="hint" role="status">${mode === "value" ? "웹에서 같은 모델의 중고가를 찾고 있어요…" : "비교할 사례를 찾고 있어요…"}</p>`;
+    try {
+      const result = await getPriceRecommendation(mode, { ...draft.fields, ...formFields });
+      if (!form.isConnected || !dialog.open || JSON.stringify(Object.fromEntries(new FormData(form))) !== fingerprint) return;
+      listingPriceResults.set(form, result);
+      output.innerHTML = priceRecommendationResult(mode, result, depositPolicy, escape);
+      if (mode === "value" && (result.message
+          || (result.match === "recorded-used" && result.references.length === 1))) {
+        const manual = dialog.querySelector('[data-form="listing-deposit-basis"]');
+        if (manual) manual.closest("details").open = true;
+      }
+    } catch (error) {
+      if (form.isConnected && dialog.open && JSON.stringify(Object.fromEntries(new FormData(form))) === fingerprint) {
+        output.replaceChildren();
+        formError(form, error.message);
+      }
+    }
+    return;
+  }
+
+  if (kind === "listing-edit") {
+    if (!dialog.open || !dialog.contains(form) || route()[0] !== "my-listings") return;
+    const item = myListings().find((listing) => listing.id === id);
+    if (!item) return;
+    const title = fields.get("title").trim(), description = fields.get("description").trim();
+    const category = fields.get("category"), neighborhood = fields.get("neighborhood");
+    const price = Number(fields.get("price"));
+    if (!title || !description || !categories.slice(1).includes(category) || !neighborhoods.includes(neighborhood)
+        || !fields.get("price") || !Number.isInteger(price) || price < 0 || price > 10_000_000) {
+      formError(form, "물품 정보와 하루 대여료를 확인해 주세요.");
+      return;
+    }
+    const { start, end } = date;
+    const changedDates = start !== (item.availableFrom ?? "") || end !== (item.availableTo ?? "");
+    if (changedDates && (start || end)) {
+      const today = localDay();
+      if (!(rentalDays(start, end) >= 1) || end < today || (start !== item.availableFrom && start < today)) {
+        formError(form, "대여 가능 기간의 시작일과 종료일을 확인해 주세요.");
+        return;
+      }
+      const outside = state.rentals.some((rental) => rental.itemId === id && rental.end >= today
+        && ["pending", "confirmed", "handover", "active", "checking", "disputed"].includes(rental.status)
+        && (start > (rental.start < today ? today : rental.start) || end < rental.end));
+      if (outside) {
+        formError(form, "대여 가능 기간에 이미 신청되었거나 진행 중인 거래 날짜를 포함해 주세요.");
+        return;
+      }
+    }
+    const changes = { title, description, category, neighborhood, price };
+    if (changedDates) Object.assign(changes, { availableFrom: start, availableTo: end });
+    if (await saveListingChange(item, changes, "물품 정보를 수정했어요.") && dialog.contains(form)) dialog.close();
+    return;
+  }
+
+  if (kind === "listing-delete") {
+    if (!dialog.open || !dialog.contains(form) || route()[0] !== "my-listings") return;
+    if (await setListingVisibility(id, "deleted")) dialog.close();
+    return;
+  }
+
+  if (kind === "listing-valuation" && accountMode) {
+    const item = visibleListing(id);
+    if (!item || item.owner !== state.role || item.itemValue) return;
+    const itemValue = itemValueFrom(Object.fromEntries(fields));
+    if (!itemValue) { formError(form, "현재 중고 가액과 근거를 확인해 주세요."); return; }
+    const deposit = depositQuote(itemValue, depositPolicy)?.amountWon ?? null;
+    const index = state.listings.indexOf(item);
+    const updated = { ...item, itemValue, deposit };
+    state.listings[index] = updated;
+    if (!await saveToDatabase()) {
+      if (state.listings[index] === updated) state.listings[index] = item;
+      return;
+    }
+    if (route()[0] === "item" && route()[1] === id) render();
+    showToast("중고 가액과 근거를 저장했어요.");
     return;
   }
 
   if (kind === "request") {
     const item = itemById(id);
-    if (!item || item.owner === state.role || state.role === "admin") return;
-    const error = findAvailability(item, date.start, date.end, state.rentals);
+    if (!item || !publicListing(item) || item.owner === state.role || state.role === "admin") return;
+    const blocked = depositBlock(item, depositPolicy, accountMode);
+    if (blocked) { formError(form, blocked); return; }
+    const money = rentalDepositSnapshot(item, depositPolicy);
+    const error = findAvailability(item, date.start, date.end, blockedRentals());
     const same = state.rentals.some((rental) => rental.status === "pending" && rental.itemId === id
       && rental.renterId === state.role && rental.start <= date.end && date.start <= rental.end);
     if (error || same) {
@@ -1128,7 +1378,7 @@ async function submit(form) {
       return;
     }
     const rental = { id: newId(), createdAt: Date.now(), itemId: id, renterId: state.role, lenderId: item.owner,
-      ...date, total: item.price * rentalDays(date.start, date.end), deposit: item.deposit ?? 0, status: "pending" };
+      ...date, ...money, total: item.price * rentalDays(date.start, date.end), status: "pending" };
     state.rentals.unshift(rental);
     announce(item.owner, rental, "새 대여 신청이 도착했어요.");
     const saving = save();
@@ -1167,7 +1417,10 @@ async function submit(form) {
       }
     }
     const title = draft.fields.title.trim(), description = draft.fields.description.trim();
-    const price = Number(draft.fields.price), deposit = Number(draft.fields.deposit);
+    const price = Number(draft.fields.price);
+    const itemValue = itemValueFrom(draft.fields);
+    const deposit = depositQuote(itemValue, depositPolicy)?.amountWon ?? null;
+    const pricingContext = pricingContextFrom(draft.fields);
     const category = draft.fields.category, area = draft.fields.neighborhood;
     const date = { start: draft.fields.start, end: draft.fields.end };
     const fieldSnapshot = JSON.stringify(draft.fields);
@@ -1201,7 +1454,7 @@ async function submit(form) {
         return;
       }
       const cover = photos.find((photo) => photo.id === draft.coverId) || photos[0];
-      const listing = { id: newId(), createdAt: Date.now(), title, description, price, deposit, owner: role, category,
+      const listing = { id: newId(), createdAt: Date.now(), title, description, price, deposit, itemValue, pricingContext, owner: role, category,
         neighborhood: area, image: cover.source, photos, coverPhotoId: cover.id, inspectionPlan: structuredClone(draft.plan),
         availableFrom: date.start, availableTo: date.end };
       state.listings.unshift(listing);
@@ -1339,8 +1592,9 @@ if (persistDatabase) {
       if (!await persistDatabase.refresh()) return;
       const arrived = Object.values(state.messages).flat().some(m => !previousIds.has(m.id) && m.sender !== state.role && !m.read);
       if (arrived) showToast("새 채팅 메시지가 도착했어요.");
-      const [page] = route();
-      if (["chat", "profile", "person", "membership", "trade"].includes(page) && !dialog.open) {
+      const [page, id] = route();
+      if ((["chat", "profile", "person", "membership", "trade", "my-listings", "saved"].includes(page)
+          || (page === "item" && !visibleListing(id))) && !dialog.open) {
         const input = screen.querySelector('[name="message"]');
         const draft = input?.value, focused = input && document.activeElement === input;
         const history = screen.querySelector(".chat-history");
@@ -1350,6 +1604,7 @@ if (persistDatabase) {
         if (updated && draft !== undefined) { updated.value = draft; if (focused) updated.focus({preventScroll:true}); }
         if (scroll !== null && screen.querySelector(".chat-history")) screen.querySelector(".chat-history").scrollTop = scroll;
       } else {
+        if (page === "home") refreshHomeRows();
         const count = totalChatUnread();
         const label = navigation.querySelector(".nav-unread");
         if (label) { label.hidden = !count; label.textContent = count > 99 ? "99+" : count; label.setAttribute("aria-label", `안 읽은 메시지 ${count}개`); }

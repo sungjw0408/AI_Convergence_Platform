@@ -6,6 +6,8 @@ export const people = {
   admin: { name: "관리자", neighborhood: "죽전동" },
 };
 
+export const publicListing = (item) => Boolean(item) && (item.visibility === undefined || item.visibility === "public");
+
 export const statuses = {
   pending: "승인 대기",
   confirmed: "예약 확정",
@@ -56,9 +58,9 @@ export function rentalDays(start, end) {
   return dayNumber(end) - dayNumber(start) + 1;
 }
 
-export function findAvailability(item, start, end, rentals, ignoredRental) {
+export function findAvailability(item, start, end, rentals, ignoredRental, today = localDay()) {
   const days = rentalDays(start, end);
-  if (!Number.isFinite(days) || days < 1 || start < localDay()) return "유효한 대여 기간을 선택해 주세요.";
+  if (!Number.isFinite(days) || days < 1 || start < today) return "유효한 대여 기간을 선택해 주세요.";
   if ((item.availableFrom && start < item.availableFrom) || (item.availableTo && end > item.availableTo)) {
     return "공급자가 설정한 대여 가능 기간을 선택해 주세요.";
   }
@@ -69,16 +71,10 @@ export function findAvailability(item, start, end, rentals, ignoredRental) {
     }
   }
   const occupies = ["confirmed", "handover", "active", "checking", "disputed"];
-  const hasConflict = rentals.some((rental) => rental.id !== ignoredRental && rental.itemId === item.id
+  const hasConflict = rentals.some((rental) => (ignoredRental === undefined || rental.id !== ignoredRental) && rental.itemId === item.id
     && (["handover", "active", "checking"].includes(rental.status) || (rental.status === "disputed" && !rental.after)
       || (occupies.includes(rental.status) && start <= rental.end && rental.start <= end)));
   return hasConflict ? "선택한 기간에 대여할 수 없어요. 다른 날짜를 선택해 주세요." : "";
-}
-
-export function suggestedFields(title) {
-  if (/드릴|드라이버|공구|렌치/.test(title)) return { category: "공구", price: 5000 };
-  if (/빔|프로젝터|카메라|노트북|스피커/.test(title)) return { category: "디지털", price: 9000 };
-  return { category: "생활용품", price: 4000 };
 }
 
 const storageKey = "neighbor-storage-demo-v1";

@@ -6,8 +6,9 @@ const captureContexts = new WeakMap();
 
 export function newListingDraft(area) {
   const plan = inspectionPlan({ title: "" });
-  const draft = { fields: { title: "", description: "", category: "", price: "", deposit: "", neighborhood: area, start: "", end: "" },
-    plan, photos: [], coverId: null, activeViewId: plan.views[0].id, step: 0, photoMode: "capture", busy: false, error: "" };
+  const draft = { fields: { title: "", description: "", category: "", price: "", neighborhood: area, start: "", end: "",
+      valueWon: "", valueEvidence: "", modelName: "", condition: "", usageHistory: "", purchaseMonth: "" },
+    plan, photos: [], advice: null, coverId: null, activeViewId: plan.views[0].id, step: 0, photoMode: "capture", busy: false, error: "" };
   captureContexts.set(draft, {});
   return draft;
 }

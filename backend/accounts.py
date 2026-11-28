@@ -6,6 +6,9 @@ import firebase_admin
 import requests
 from firebase_admin import auth, exceptions
 from flask import g, jsonify, request
+from google.api_core.exceptions import GoogleAPICallError
+
+from account_records import signup_profile
 
 SESSION_NAME = "rento_account"
 SESSION_DURATION = timedelta(days=5)
@@ -36,7 +39,8 @@ def register_accounts(app, project, api_key, emulator):
         if cookie:
             try:
                 claims = auth.verify_session_cookie(cookie, check_revoked=True, app=firebase)
-                g.account = {"uid": claims["uid"], "email": claims.get("email", "")}
+                g.account = {"uid": claims["uid"], "email": claims.get("email", ""),
+                             "displayName": claims.get("name", "")}
             except (auth.InvalidSessionCookieError, auth.UserDisabledError, auth.UserNotFoundError):
                 pass
             except exceptions.FirebaseError:
@@ -64,13 +68,20 @@ def register_accounts(app, project, api_key, emulator):
         if action not in ("signup", "login"):
             return jsonify(error="지원하지 않는 계정 요청이에요."), 404
         fields = request.get_json(silent=True)
-        if not isinstance(fields, dict) or (request.content_length or 0) > 4096:
+        max_size = 52_000 if action == "signup" else 4096
+        if not isinstance(fields, dict) or (request.content_length or 0) > max_size:
             return jsonify(error="이메일과 비밀번호를 확인해 주세요."), 400
         email, password = fields.get("email"), fields.get("password")
         if not isinstance(email, str) or not isinstance(password, str) or len(email) > 254 or len(password) > 128:
             return jsonify(error="이메일과 비밀번호를 확인해 주세요."), 400
         if action == "signup" and len(password) < 8:
             return jsonify(error="8자 이상 비밀번호를 입력해 주세요."), 400
+        profile = None
+        if action == "signup" and "profile" in fields:
+            try:
+                profile = signup_profile(fields["profile"])
+            except ValueError as error:
+                return jsonify(error=str(error)), 400
         operation = {"signup": "signUp", "login": "signInWithPassword"}[action]
         try:
             result = requests.post(f"{endpoint}/v1/accounts:{operation}", params={"key": api_key},
@@ -87,7 +98,14 @@ def register_accounts(app, project, api_key, emulator):
             app.logger.warning("Firebase could not create a Rento session: %s", type(error).__name__)
             return jsonify(error="로그인 서비스에 연결하지 못했어요."), 503
 
-        response = jsonify(ok=True)
+        profile_saved = True
+        if profile is not None:
+            try:
+                app.extensions["rento_create_profile"](data["localId"], profile)
+            except (GoogleAPICallError, KeyError):
+                app.logger.warning("Firebase account created but Rento profile could not be saved.")
+                profile_saved = False
+        response = jsonify(ok=True, profileSaved=profile_saved)
         response.set_cookie(SESSION_NAME, cookie, max_age=int(SESSION_DURATION.total_seconds()),
                             httponly=True, secure=request.is_secure, samesite="Lax")
         return response
