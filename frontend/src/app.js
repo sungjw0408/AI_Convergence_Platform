@@ -1,6 +1,7 @@
 import { introductionIds, introductionPool, introductionPhotos, setIntroductionCover, toggleIntroductionPhoto } from "./listing-presentation.js";
 import { registrationBaseline, photoTiming } from "./handoff-photos.js";
 import { bindSelectPickers } from "./select-picker.js";
+import { bindSwipeActions } from "./swipe-actions.js";
 bindSelectPickers(document);
 import { bindReservationPicker } from "./reservation-picker.js";
 bindReservationPicker(document);
@@ -10,7 +11,7 @@ import { rankListings, recommendationCandidates } from "./listing-recommendation
 import { depositPreview, listingEditForm, priceRecommendationForm, priceRecommendationResult } from "./listing-registration-view.js";
 import { accountPage, accountRequest, profileEditForm, profileImage, readProfileSettings } from "./accounts.js";
 import { sendRentalCommand, commandForm } from "./rental-lifecycle.js?v=team2-compact-4";
-import { connectRentalDatabase } from "./rental-database.js";
+import { connectRentalDatabase, maxDatabaseChanges } from "./rental-database.js";
 import { newAIConversation, sendAIMessage } from "./ai-room.js";
 import { comparePhotos } from "./compare.js";
 import { openCapture } from "./capture.js";
@@ -28,11 +29,11 @@ import {
 } from "./model.js?v=rento-home-5-ren";
 import {
   aiRoomPage, chatPage, comparePage, conversationPage, inquiryPage, dateInputs, escape, home, itemPage, listingRows,
-  membershipPage, missingPage, modal, pageHeader, profilePage, registerPage, reputationPanel, reviewForm,
+  membershipPage, missingPage, modal, noticeList, pageHeader, profilePage, registerPage, reputationPanel, reviewForm,
   rentalEstimate, rentalsPage, tradePage,
 } from "./views.js?v=rento-team2-develop-5";
 
-import { canReview, reputation, seat, unread, quota, membershipPanel } from "./community.js";
+import { canReview, chatListed, reputation, seat, unread, quota, membershipPanel, visibleChatMessages } from "./community.js";
 import {
   findInquiry,
   createInquiry,
@@ -42,6 +43,8 @@ const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
 const dialog = document.querySelector("#dialog");
 const toast = document.querySelector("#toast");
+bindSwipeActions(screen);
+bindSwipeActions(dialog);
 const databaseMode = document.querySelector('meta[name="rento-database"]')?.content;
 const accountMode = databaseMode === "accounts";
 const depositPolicy = JSON.parse(document.querySelector('meta[name="rento-deposit-policy"]')?.content ?? "null");
@@ -151,14 +154,23 @@ state.inquiries ??= [];
 const inquiryById = (id) =>
   state.inquiries.find(room => room.id === id);
 
+const chatDeletions = (role = state.role) => state.chatDeletedThrough?.[role] ?? {};
+const visibleThread = (id, role = state.role) => visibleChatMessages(state.messages[id], chatDeletions(role)[id]);
+
+function canDeleteChat(id) {
+  const rental = rentalById(id);
+  return chatListed(state.messages[id], chatDeletions(), id)
+    && (isInquiryParty(inquiryById(id), state.role) || (isParty(rental) && chatAllowed(rental)));
+}
+
 function totalChatUnread(role = state.role) {
   const rentalCount = state.rentals
-    .filter(r => isParty(r) && chatAllowed(r))
-    .reduce((n, r) => n + unread(state.messages[r.id], role), 0);
+    .filter(r => (r.renterId === role || r.lenderId === role) && chatAllowed(r))
+    .reduce((n, r) => n + unread(visibleThread(r.id, role), role), 0);
 
   const inquiryCount = state.inquiries
     .filter(room => isInquiryParty(room, role))
-    .reduce((n, room) => n + unread(state.messages[room.id], role), 0);
+    .reduce((n, room) => n + unread(visibleThread(room.id, role), role), 0);
 
   return rentalCount + inquiryCount;
 }
@@ -208,6 +220,11 @@ function showToast(message) {
   toastTimeout = setTimeout(() => { toast.hidden = true; }, 3200);
 }
 
+function saveTeamPreferences() {
+  const { role, area, favorites, chatDeletedThrough } = state;
+  return writeState({ role, area, favorites, chatDeletedThrough }, preferencesKey);
+}
+
 async function saveToDatabase() {
   try { await persistDatabase(state); }
   catch (error) {
@@ -216,8 +233,7 @@ async function saveToDatabase() {
     return false;
   }
   if (accountMode) return true;
-  const { role, area, favorites } = state;
-  if (!writeState({ role, area, favorites }, preferencesKey)) showToast("화면 설정을 이 브라우저에 저장하지 못했어요.");
+  if (!saveTeamPreferences()) showToast("화면 설정을 이 브라우저에 저장하지 못했어요.");
   return true;
 }
 
@@ -306,7 +322,7 @@ function render() {
   let content;
   if (page === "home") content = home({
     area: state.area, ...filters, rows: homeRows(),
-    unread: state.notices.some((notice) => notice.role === role && !notice.read),
+    unread: ownNotices().some(notice => !notice.read),
   });
   else if (page === "assistant") content = aiRoomPage(assistantSession(), visibleListing);
   else if (page === "item") {
@@ -326,7 +342,8 @@ function render() {
       state.messages,
       chatAllowed,
       state.inquiries,
-      chatProfiles
+      chatProfiles,
+      chatDeletions(role)
     );
   } else if (page === "chat") {
     const room = inquiryById(id);
@@ -335,7 +352,7 @@ function render() {
     if (room && isInquiryParty(room, role)) {
       content = inquiryPage(
         room,
-        state.messages[id] ?? [],
+        visibleThread(id, role),
         role,
         chatProfiles
       );
@@ -343,7 +360,7 @@ function render() {
       content = conversationPage(
         rental,
         itemById(rental.itemId),
-        state.messages[id] ?? [],
+        visibleThread(id, role),
         role,
         chatProfiles
       );
@@ -473,7 +490,7 @@ function observeMessages() {
   const [page,id] = route(), role = state.role;
   const history = screen.querySelector(".chat-history");
   if (page !== "chat" || !id || !history || document.hidden || dialog.open || !globalThis.IntersectionObserver) return;
-  const thread = state.messages[id] || [];
+  const thread = visibleThread(id, role);
   messageObserver = new IntersectionObserver(entries => {
     if (document.hidden || dialog.open || route()[0] !== "chat" || route()[1] !== id || state.role !== role) return;
     let changed = false;
@@ -534,8 +551,8 @@ function navigate(hash) {
   else location.hash = hash;
 }
 
-function showDialog(title, body) {
-  dialog.innerHTML = modal(title, body);
+function showDialog(title, body, headerActions) {
+  dialog.innerHTML = modal(title, body, headerActions);
   dialog.setAttribute("aria-labelledby", "dialog-title");
   if (!dialog.open) dialog.showModal();
 }
@@ -874,16 +891,41 @@ async function updateTrade(rental, status, recipient, message) {
   return true;
 }
 
-async function openNotices() {
-  const notices = state.notices.filter((notice) => notice.role === state.role);
-  for (const notice of notices) notice.read = true;
-  const saving = save();
-  if (saving && !await saving) return;
-  const indicator = screen.querySelector(".notification i");
-  if (indicator) indicator.remove();
-  showDialog("알림", notices.length ? `<div class="menu-list">${notices.map((notice) =>
-    `<a href="#trade/${notice.rentalId}">${escape(notice.message)}${icon("right")}</a>`).join("")}</div>`
-    : '<p class="notice">새 알림이 없어요.</p>');
+function ownNotices() {
+  return state.notices.filter(notice => notice.role === state.role && !notice.dismissed);
+}
+
+function openNotices() {
+  const notices = ownNotices().sort((a, b) => b.createdAt - a.createdAt);
+  const actions = notices.length ? `<div class="notice-options">
+    <button type="button" class="icon-button notice-more" data-action="notice-more"
+        aria-label="알림 더보기" aria-controls="notice-actions" aria-expanded="false">${icon("more")}</button>
+    <div class="notice-actions" id="notice-actions" hidden>
+      <button type="button" data-action="notice-delete-all">${icon("trash")}전체 삭제</button>
+    </div>
+  </div>` : "";
+  showDialog("알림", noticeList(notices), actions);
+}
+
+function setNoticeMenu(open) {
+  const menu = dialog.querySelector("#notice-actions");
+  if (!menu || menu.hidden === !open) return false;
+  menu.hidden = !open;
+  dialog.querySelector(".notice-more").setAttribute("aria-expanded", String(open));
+  return true;
+}
+
+async function updateNotices(notices, changes) {
+  const previous = notices.map(notice => ({ ...notice }));
+  for (const notice of notices) Object.assign(notice, changes);
+  if (databaseMode ? await saveToDatabase() : writeState(state)) return true;
+  notices.forEach((notice, index) => {
+    for (const key of Object.keys(changes)) {
+      if (Object.hasOwn(previous[index], key)) notice[key] = previous[index][key];
+      else delete notice[key];
+    }
+  });
+  return false;
 }
 
 function refreshHomeRows() {
@@ -932,6 +974,62 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const { action, id } = target.dataset;
 
+  if (action === "notice-more") {
+    if (dialog.open && dialog.contains(target)) setNoticeMenu(target.getAttribute("aria-expanded") === "false");
+    return;
+  }
+  if (action === "notice-delete-all") {
+    if (!dialog.open || !dialog.contains(target) || target.closest("#notice-actions")?.hidden !== false) return;
+    const noticeIds = [...dialog.querySelectorAll('[data-action="notice-delete"]')].map(button => button.dataset.id);
+    if (!noticeIds.length) return;
+    showDialog("알림 전체 삭제", `<form data-form="notice-delete-all" class="form-card plain delete-confirm-form">
+      <p>받은 알림 ${noticeIds.length}개를 모두 삭제할까요?</p>
+      ${noticeIds.map(noticeId => `<input type="hidden" name="noticeId" value="${escape(noticeId)}">`).join("")}
+      ${formErrorMarkup}
+      <div class="delete-confirm-actions">
+        <button class="button secondary" type="button" data-action="notices" autofocus>취소</button>
+        <button class="button delete-confirm-button" type="submit">전체 삭제</button>
+      </div>
+    </form>`);
+    dialog.querySelector("[autofocus]")?.focus();
+    return;
+  }
+  if (action === "notice-open" || action === "notice-delete") {
+    event.preventDefault();
+    const notice = ownNotices().find(entry => entry.id === id);
+    if (!notice || !dialog.open || !dialog.contains(target)) return;
+    if (action === "notice-open") {
+      if (!notice.read && !await updateNotices([notice], { read: true })) {
+        if (!databaseMode) showToast("알림을 확인하지 못했어요. 다시 시도해 주세요.");
+        return;
+      }
+      navigate(`#trade/${notice.rentalId}`);
+    } else {
+      if (!await updateNotices([notice], { read: true, dismissed: true })) {
+        if (!databaseMode) showToast("알림을 삭제하지 못했어요. 다시 시도해 주세요.");
+        return;
+      }
+      render();
+      if (dialog.open && dialog.contains(target)) {
+        openNotices();
+        (dialog.querySelector(".notice-link") ?? dialog.querySelector(".dialog-header button")).focus({ preventScroll: true });
+      }
+      showToast("알림을 삭제했어요.");
+    }
+    return;
+  }
+  if (action === "delete-chat") {
+    if (!canDeleteChat(id)) return;
+    showDialog("대화 삭제", `<form data-form="chat-delete" data-id="${escape(id)}" class="form-card plain delete-confirm-form">
+      <p>내 채팅 목록에서 대화와 메시지를 삭제해요. 새 메시지가 오면 대화가 다시 표시돼요.</p>
+      ${formErrorMarkup}
+      <div class="delete-confirm-actions">
+        <button class="button secondary" type="button" data-action="close" autofocus>취소</button>
+        <button class="button delete-confirm-button" type="submit">삭제</button>
+      </div>
+    </form>`);
+    return;
+  }
   if (action === "start-inquiry") {
     await startInquiry(id);
     return;
@@ -1122,8 +1220,11 @@ document.addEventListener("click", async (event) => {
     if (saving && !await saving) return;
     dialog.close();
     render();
-  } else if (action === "notices") await openNotices();
-  else if (action === "role" && !accountMode && Object.hasOwn(people, id)) {
+  } else if (action === "notices") {
+    const returning = dialog.contains(target);
+    openNotices();
+    if (returning) (dialog.querySelector(".notice-more") ?? dialog.querySelector(".dialog-header button"))?.focus();
+  } else if (action === "role" && !accountMode && Object.hasOwn(people, id)) {
     state.role = id;
     direction = "in";
     const saving = save();
@@ -1324,6 +1425,47 @@ async function submit(form, submitter) {
     return;
   }
   if (accountMode && !account) return;
+  if (kind === "notice-delete-all") {
+    if (!dialog.open || !dialog.contains(form)) return;
+    const ids = new Set(fields.getAll("noticeId"));
+    const notices = ownNotices().filter(notice => ids.has(notice.id));
+    const batchSize = databaseMode ? maxDatabaseChanges : notices.length;
+    for (let offset = 0; offset < notices.length; offset += batchSize) {
+      const batch = notices.slice(offset, offset + batchSize);
+      if (!await updateNotices(batch, { read: true, dismissed: true })) {
+        if (!databaseMode) formError(form, "알림을 삭제하지 못했어요. 다시 시도해 주세요.");
+        return;
+      }
+    }
+    render();
+    if (dialog.open && dialog.contains(form)) {
+      openNotices();
+      dialog.querySelector(".dialog-header button")?.focus({ preventScroll: true });
+    }
+    showToast("알림을 모두 삭제했어요.");
+    return;
+  }
+  if (kind === "chat-delete") {
+    if (!dialog.open || !dialog.contains(form) || !canDeleteChat(id)) return;
+    const role = state.role;
+    const previous = state.chatDeletedThrough;
+    state.chatDeletedThrough = { ...previous, [role]: {
+      ...chatDeletions(role), [id]: state.messages[id]?.at(-1)?.id ?? null,
+    } };
+    const saved = accountMode ? await saveToDatabase() : databaseMode ? saveTeamPreferences() : writeState(state);
+    if (!saved) {
+      state.chatDeletedThrough = previous;
+      formError(form, "대화를 삭제하지 못했어요. 다시 시도해 주세요.");
+      return;
+    }
+    if (dialog.contains(form)) dialog.close();
+    if (route()[0] === "chat" && !route()[1]) {
+      render();
+      (screen.querySelector(".conversation-row") ?? screen).focus({ preventScroll: true });
+    }
+    showToast("내 채팅에서 대화를 삭제했어요.");
+    return;
+  }
   if (kind === "edit-profile") {
     if (!account || !dialog.open || !dialog.contains(form) || route()[0] !== "profile") return;
     const details = await readProfileSettings(fields, state.profilePhotos?.[state.role]);
@@ -1727,7 +1869,16 @@ document.addEventListener("submit", async (event) => {
   }
 });
 
+dialog.addEventListener("cancel", event => {
+  if (!setNoticeMenu(false)) return;
+  event.preventDefault();
+  dialog.querySelector(".notice-more").focus();
+});
+dialog.addEventListener("focusin", event => {
+  if (!event.target.closest(".notice-options")) setNoticeMenu(false);
+});
 dialog.addEventListener("click", (event) => {
+  if (!event.target.closest(".notice-options")) setNoticeMenu(false);
   if (event.target === dialog) {
     const box = dialog.getBoundingClientRect();
     if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
@@ -1753,7 +1904,8 @@ if (persistDatabase) {
     try {
       const previousIds = new Set(Object.values(state.messages).flat().map(m => m.id));
       if (!await persistDatabase.refresh()) return;
-      const arrived = Object.values(state.messages).flat().some(m => !previousIds.has(m.id) && m.sender !== state.role && !m.read);
+      const arrived = Object.keys(state.messages).some(id => visibleThread(id)
+        .some(m => !previousIds.has(m.id) && m.sender !== state.role && !m.read));
       if (arrived) showToast("새 채팅 메시지가 도착했어요.");
       const [page, id] = route();
       if ((["chat", "profile", "person", "membership", "rentals", "trade", "my-listings", "saved"].includes(page)

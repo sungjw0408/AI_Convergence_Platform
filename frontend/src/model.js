@@ -89,6 +89,7 @@ export function initialState() {
     listings: [],
     rentals: [],
     messages: {},
+    chatDeletedThrough: {},
     notices: [],
     memberships: {},
     inquiries: []

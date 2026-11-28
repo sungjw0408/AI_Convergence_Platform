@@ -1,4 +1,5 @@
 const endpoint = "/api/rental-database";
+export const maxDatabaseChanges = 450;
 
 function documents(state, uid) {
   const records = {
@@ -12,6 +13,7 @@ function documents(state, uid) {
   };
   if (uid) {
     const profile = { id: uid, area: state.area, favorites: state.favorites };
+    if (state.chatDeletedThrough?.[uid]) profile.chatDeletedThrough = state.chatDeletedThrough[uid];
     if (Object.hasOwn(state.displayNames ?? {}, uid)) profile.displayName = state.displayNames[uid];
     if (Object.hasOwn(state.profilePhotos ?? {}, uid)) profile.photo = state.profilePhotos[uid];
     records.profiles = [profile];
@@ -64,6 +66,7 @@ function applySnapshot(state, uid, snapshot) {
     const profile = records.profiles[0];
     state.area = profile.area ?? state.area;
     state.favorites = profile.favorites ?? [];
+    if (profile.chatDeletedThrough) (state.chatDeletedThrough ??= {})[uid] = profile.chatDeletedThrough;
     if (typeof profile.displayName === "string") state.displayNames[uid] = profile.displayName;
     if (typeof profile.photo === "string") state.profilePhotos[uid] = profile.photo;
   }

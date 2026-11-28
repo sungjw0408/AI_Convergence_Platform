@@ -4,13 +4,15 @@ const dayKey = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate()
 const valid = value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value || '') ? value : /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? `${value}T09:00` : '';
 const label = value => value ? new Date(value.length === 10 ? value + 'T12:00:00' : value).toLocaleDateString('ko-KR', {month:'long',day:'numeric',weekday:'short'}) : '날짜 선택';
 
-export function reservationPicker(date = {}, { dateOnly = false } = {}) {
+export function reservationPicker(date = {}, { dateOnly = false, showGuide = true } = {}) {
   const start = valid(date.start), end = valid(date.end?.length === 10 ? date.end + 'T18:00' : date.end);
   return `<div class="reservation-picker" data-date-only="${dateOnly}"><input type="hidden" name="start" value="${dateOnly ? start.slice(0,10) : start}"><input type="hidden" name="end" value="${dateOnly ? end.slice(0,10) : end}">
     <div class="reservation-dates">${['start','end'].map((side, i) => `<button type="button" class="reservation-date" data-picker="date" data-side="${side}" aria-expanded="false"><span>${i ? '반납 예정' : '대여 시작'}</span><strong data-date-label="${side}">${label(i ? end : start)}</strong>${icon('calendar')}</button>`).join('')}<span class="reservation-arrow" aria-hidden="true">→</span></div>
     <div class="reservation-calendar" hidden></div>
     ${dateOnly ? "" : `<div class="reservation-times">${['start','end'].map((side, i) => `<button type="button" data-picker="time" data-side="${side}" aria-expanded="false"><span>${i ? '반납 시간' : '대여 시간'}</span><strong data-time-label="${side}">${(i ? end : start).slice(11) || (i ? '18:00' : '09:00')}</strong>${icon('chevronDown')}</button>`).join('')}</div>
-    <div class="reservation-clock" hidden></div>`}<p class="hint reservation-guide">${dateOnly ? "대여할 시작일과 종료일을 선택해 주세요." : "시작일과 반납일을 고른 뒤 시간을 확인해 주세요."}</p></div>`;
+    <div class="reservation-clock" hidden></div>`}
+    ${showGuide ? `<p class="hint reservation-guide">${dateOnly ? "대여할 시작일과 종료일을 선택해 주세요." : "시작일과 반납일을 고른 뒤 시간을 확인해 주세요."}</p>` : ""}
+  </div>`;
 }
 
 function refresh(root) {

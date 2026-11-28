@@ -6,7 +6,7 @@ export function chargedDays(start, end) {
 }
 
 export function reservationInputs(date = {}, zone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
-  return reservationPicker(date) + `<input type="hidden" name="timeZone" value="${zone.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"><p class="hint">현재 기기의 날짜와 시각을 기준으로 예약해요.</p>`;
+  return reservationPicker(date, { showGuide: false }) + `<input type="hidden" name="timeZone" value="${zone.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}">`;
 }
 
 export async function sendRentalCommand(action, data, actor, accountMode = false) {
