@@ -294,7 +294,6 @@ export function tradePage(rental, item, role, feedback, selectedView, lifecycleM
     ${lifecyclePanel(rental, role, escape, won)}
     ${inspectionCard(rental, item, feedback, selectedView, escape)}
     ${rental.dispute ? `<section class="notice"><strong>분쟁 기록</strong><p>${escape(rental.dispute)}</p>${rental.resolution ? `<p>검토 의견 · ${escape(rental.resolution)}</p>` : ""}</section>` : ""}
-    ${(owns || borrows) ? `<a href="#person/${escape(owns ? rental.renterId : rental.lenderId)}">상대방 프로필</a>` : ""}
     ${Object.entries(publicFeedback(rental)).map(([side, review]) => `<section class="notice"><strong>${side === "renter" ? "대여자" : "공급자"}가 남긴 후기 · ${review.rating}점</strong><p>${escape(review.text)}</p></section>`).join("")}
     ${status === "complete" && rental.completedAt && !Object.keys(publicFeedback(rental)).length ? '<p class="hint">후기는 양쪽 작성 또는 거래 완료 7일 후 공개돼요.</p>' : ""}
     ${lifecycleMode && rental.lifecycleVersion !== 1 && status !== "complete"
