@@ -57,7 +57,7 @@ backend/.venv-team2/Scripts/python.exe backend/lifecycle_server.py --port 8003
 
 | 연결 담당 | 데이터/명령 |
 | --- | --- |
-| 팀원 1 물품 | `price`, `deposit`, `usedValue`, `owner`, `availableFrom`, `availableTo`. 거래 시점 값을 동결하며 비율 정책을 추가하지 않습니다. |
+| 팀원 1 물품 | 계정 모드는 `price`, `itemValue`, `owner`, `availableFrom`, `availableTo`를 읽습니다. 신청 당시 가액·서버 보증금 정책·계산한 보증금을 동결하며, 배상 상한은 그 가액의 `amountWon`을 사용합니다. |
 | 성진욱 사진 | `inspection`의 plan/before/after/checks와 원본 capture 참조. handoff/return/reshoot 명령을 사용합니다. 비교 성공은 반납의 전제 조건이 아닙니다. |
 | 성진욱 분쟁 | dispute, propose_compensation 및 evidence/basis/amount. 제안은 합의를 대신하지 않으며 실제 증빙 판독·금액 확인 UI는 해당 담당 범위입니다. |
 | 팀원 3 후기 | `status=complete`, `completedAt`, `renterId`, `lenderId`. 후기 공개·집계는 수정하지 않습니다. |
@@ -78,7 +78,7 @@ Cloud Run 등 유휴 시 CPU가 중지되는 배포에서 15초 스레드의 실
 ## 미정 정책 처리
 
 - 예약 수수료 적용 여부와 요율을 만들거나 무료 확정으로 표시하지 않습니다.
-- 보증금 비율·최소·최대 금액을 만들지 않습니다. 제공된 물품의 보증금 스냅샷만 사용합니다.
+- 팀원 1과 통합한 Firestore 계정 모드에서 보증금은 `RENTO_DEPOSIT_POLICY`를 적용해 신청 시 계산합니다. 로컬 SQLite 시연은 제공된 보증금을 사용합니다.
 - 공통 날짜 계산 시간대는 미정이므로 거래 양식에 선택한 시간대를 표시·저장합니다. 이것을 서비스 공통 정책으로 간주하지 않습니다.
 - 시작 시각이 지난 신청의 승인·결제는 차단합니다. 시작 전 12시간/1시간을 확보할 수 없는 경우의 별도 정책은 확정하지 않았습니다.
 - 연장 결제는 현재 반납 기한 안에서만 가능하게 하며 별도의 미확정 연장 결제 유예 시간을 만들지 않습니다.

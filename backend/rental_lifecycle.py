@@ -11,6 +11,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import json
 import re
 
+from listing_pricing import deposit_for_value, valid_item_value
+from listing_visibility import public_listing
+
 HOUR = 3_600_000
 DAY = 24 * HOUR
 BUSY = {'payment_pending', 'confirmed', 'handover', 'active', 'checking', 'disputed'}
@@ -125,6 +128,13 @@ def advance(records, now):
             extension['status'] = 'expired'
 
 
+def held_extension(rental, now):
+    extension = rental.get("extension") or {}
+    if extension.get("status") == "payment_pending" and extension.get("paymentDueAt", 0) > now:
+        return extension["endAt"]
+    return None
+
+
 def available(rentals, item, start, end, zone, now, ignored=None):
     rental_days(start, end)
     start_day, end_day = calendar_date(start, zone).isoformat(), calendar_date(end, zone).isoformat()
@@ -140,10 +150,7 @@ def available(rentals, item, start, end, zone, now, ignored=None):
         if other['status'] == 'payment_pending' and other.get('paymentDueAt', 0) <= now:
             continue
         if other.get('lifecycleVersion') == 1:
-            other_start, other_end = other['startAt'], other['endAt']
-            ext = other.get('extension', {})
-            if ext.get('status') == 'payment_pending' and ext['paymentDueAt'] > now:
-                other_end = ext['endAt']
+            other_start, other_end = other['startAt'], held_extension(other, now) or other['endAt']
             # Unreturned active rentals cannot be advertised as available after their due date.
             occupied = other['status'] in {'handover', 'active', 'checking'} or (other['status'] == 'disputed' and not other.get('after'))
             if (occupied and end > other_start) or start < other_end and other_start < end:
@@ -171,10 +178,13 @@ def evidence(rental, data, phase):
         require(all(record.get(k) == previous.get(k) for k in ('plan', 'before', 'beforeChecks', 'beforeNote')),
                 '대여 전 사진은 변경할 수 없어요.')
     rental['inspection'] = deepcopy(record)
+    if phase == 'after':
+        rental.pop('photoAnalysis', None)
     rental[phase] = next(iter(photos.values()))['source']
 
 
-def execute(records, items, actor, action, data, request_id, now, admin=False):
+def execute(records, items, actor, action, data, request_id, now, admin=False, *,
+            deposit_policy=None, require_value=False):
     """Mutates a private snapshot inside the caller's serializable transaction."""
     require(isinstance(data, dict), '요청 내용을 확인해 주세요.')
     require(isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_-]{8,100}', request_id), '중복 방지 요청 번호가 필요해요.')
@@ -187,21 +197,30 @@ def execute(records, items, actor, action, data, request_id, now, admin=False):
     advance(records, now)
     if action == 'request':
         item = next((i for i in items if i['id'] == data.get('itemId')), None)
-        require(item and actor != item['owner'] and not admin, '이 물품에 신청할 수 없어요.')
+        require(item and public_listing(item) and actor != item['owner'] and not admin, '이 물품에 신청할 수 없어요.')
         start, end, zone = timestamp(data.get('startAt')), timestamp(data.get('endAt')), data.get('timeZone')
         require(start > now, '시작 시각은 현재 이후로 선택해 주세요.')
         available(records, item, start, end, zone, now)
         require(not any(r['renterId'] == actor and r['itemId'] == item['id'] and r['status'] == 'pending' and
                 r.get('startAt', 0) < end and start < r.get('endAt', 0) for r in records), '이미 신청한 시간과 겹쳐요.')
-        rate, deposit = money(item['price']), money(item.get('deposit', 0))
+        value = item.get("itemValue")
+        if require_value:
+            require(valid_item_value(value), "공급자가 중고 가액과 근거를 추가해야 대여를 신청할 수 있어요.")
+            require(deposit_policy is not None, "보증금 정책이 정해지면 대여를 신청할 수 있어요.")
+        with_policy = valid_item_value(value) and deposit_policy is not None
+        rate = money(item['price'])
+        deposit = deposit_for_value(value, deposit_policy) if with_policy else money(item.get('deposit', 0))
         rental = {'id': 'r-' + request_id, 'itemId': item['id'], 'renterId': actor, 'lenderId': item['owner'],
                   'lifecycleVersion': 1, 'status': 'pending', 'createdAt': now, 'requestExpiresAt': now + 12 * HOUR,
                   'startAt': start, 'endAt': end, 'timeZone': zone,
                   'start': calendar_date(start, zone).isoformat(), 'end': calendar_date(end, zone).isoformat(),
                   'dailyPrice': rate, 'total': rate * rental_days(start, end), 'deposit': deposit,
-                  'usedValue': item.get('usedValue'), 'ledger': [], 'receipts': {},
+                  'usedValue': value["amountWon"] if with_policy else item.get('usedValue'),
+                  'ledger': [], 'receipts': {},
                   'finance': {'paid': False, 'baseSettled': False, 'depositReturned': False,
                               'depositHolds': [], 'lateDue': 0, 'compensationDue': 0}}
+        if with_policy:
+            rental.update(itemValue=deepcopy(value), depositPolicy=deepcopy(deposit_policy))
         require(not any(r['id'] == rental['id'] for r in records), '요청 번호가 이미 사용됐어요.')
         records.append(rental)
     else:

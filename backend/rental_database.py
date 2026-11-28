@@ -2,9 +2,16 @@
 import json
 import os
 import re
+import sys
 from urllib.parse import urlsplit
 
 from flask import abort, g, jsonify, request
+
+from listing_visibility import public_listing
+
+# Resolve through macOS so Firestore gRPC follows the active system DNS.
+if sys.platform == "darwin":
+    os.environ.setdefault("GRPC_DNS_RESOLVER", "native")
 
 COLLECTIONS = (
     "listings",
@@ -61,13 +68,14 @@ def validated_changes(data, collections=COLLECTIONS):
     return updates
 
 
-def register_database(app, client=None, space=None, account_mode=False):
+def register_database(app, client=None, space=None, account_mode=False, deposit_policy=None):
     project = os.environ.get("RENTO_FIREBASE_PROJECT")
     if client is None and not project:
         return False
 
-    from google.api_core.exceptions import GoogleAPICallError
+    from google.api_core.exceptions import AlreadyExists, GoogleAPICallError
     from google.cloud import firestore
+    from google.cloud.firestore_v1.base_query import FieldFilter
 
     if client is None:
         if project.startswith("demo-") and not os.environ.get("FIRESTORE_EMULATOR_HOST"):
@@ -78,6 +86,41 @@ def register_database(app, client=None, space=None, account_mode=False):
         from account_records import ForbiddenRecord, account_documents, authorize_updates
     else:
         ForbiddenRecord = PermissionError
+
+    def price_listings(category, uid):
+        listings = (
+            root.collection("listings")
+            .where(filter=FieldFilter("category", "==", category))
+            .select(["title", "owner", "price", "neighborhood", "pricingContext.modelName",
+                     "pricingContext.condition", "itemValue", "isDemo", "visibility"])
+        )
+        try:
+            remaining = 40
+            for doc in listings.stream(timeout=8):
+                listing = doc.to_dict()
+                if public_listing(listing) and (uid is None or listing.get("owner") != uid):
+                    yield {**listing, "id": doc.id}
+                    remaining -= 1
+                    if remaining == 0:
+                        break
+        except GoogleAPICallError:
+            raise RuntimeError("비교 자료를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.") from None
+
+    app.extensions["rento_price_listings"] = price_listings
+
+    if account_mode:
+        def create_profile(uid, profile):
+            reference = root.collection("profiles").document(uid)
+            batch = client.batch()
+            batch.create(reference, {"id": uid, "favorites": [], **profile})
+            batch.set(root, {"revision": firestore.Increment(1)}, merge=True)
+            try:
+                batch.commit()
+            except AlreadyExists:
+                # A concurrent request may already have created this profile.
+                return
+
+        app.extensions["rento_create_profile"] = create_profile
 
     @firestore.transactional
     def read(transaction, uid, since):
@@ -126,7 +169,7 @@ def register_database(app, client=None, space=None, account_mode=False):
                         actor = request.headers.get("X-Rento-Demo-Actor")
                         validate_feedback_update(current, record, actor, int(time.time() * 1000))
         if uid:
-            updates = authorize_updates(root, transaction, uid, updates)
+            updates = authorize_updates(root, transaction, uid, updates, deposit_policy)
         for name, record in updates:
             transaction.set(root.collection(name).document(record["id"]), stored_fields(record))
         transaction.set(root, {"revision": version + 1})
@@ -142,19 +185,28 @@ def register_database(app, client=None, space=None, account_mode=False):
     def lifecycle(transaction, actor=None, body=None, admin=False):
         meta = root.get(transaction=transaction).to_dict() or {}
         rentals = [app_fields(doc.to_dict()) for doc in root.collection("rentals").stream(transaction=transaction)]
-        items = [doc.to_dict() for doc in root.collection("listings").stream(transaction=transaction)]
-        if not account_mode:
-            from lifecycle_server import DEMO_ITEMS
-            items = DEMO_ITEMS + items
-        old = deepcopy(rentals)
+        old = {record["id"]: deepcopy(record) for record in rentals}
         now = int(time.time() * 1000)
         advance(rentals, now)
         result = None
-        if body:
-            result = execute(rentals, items, actor, body.get("action"), body.get("data"), body.get("requestId"), now, admin)
-        changed = [record for record in rentals if record not in old]
+        if body is not None:
+            action, data = body.get("action"), body.get("data")
+            target = data if isinstance(data, dict) else {}
+            item_id = target.get("itemId") if action == "request" else next(
+                (rental["itemId"] for rental in rentals if rental["id"] == target.get("rentalId")), None)
+            items = []
+            if isinstance(item_id, str) and DOCUMENT_ID.fullmatch(item_id):
+                listing = root.collection("listings").document(item_id).get(transaction=transaction).to_dict()
+                if listing:
+                    items.append(listing)
+            if not items and not account_mode:
+                from lifecycle_server import DEMO_ITEMS
+                items = DEMO_ITEMS
+            result = execute(rentals, items, actor, action, data, body.get("requestId"), now, admin,
+                             deposit_policy=deposit_policy, require_value=account_mode)
+        changed = [record for record in rentals if record != old.get(record["id"])]
         if changed:
-            for notice in lifecycle_notices(old, rentals, now):
+            for notice in lifecycle_notices(old.values(), rentals, now):
                 transaction.set(root.collection("notices").document(notice["id"]), notice)
             for record in changed:
                 transaction.set(root.collection("rentals").document(record["id"]), stored_fields(record))
@@ -191,7 +243,7 @@ def register_database(app, client=None, space=None, account_mode=False):
             lifecycle(client.transaction())
             record = lifecycle(client.transaction(), actor, body, admin)
             return jsonify(rental=record)
-        except (ValueError, TypeError, KeyError) as error:
+        except (ValueError, TypeError, KeyError, OverflowError) as error:
             return jsonify(error=str(error)), 400
         except GoogleAPICallError:
             return jsonify(error="거래 저장에 실패했어요. 같은 요청으로 다시 시도해 주세요."), 503

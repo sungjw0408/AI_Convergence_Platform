@@ -6,6 +6,12 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+def configured_model():
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return os.environ.get("GEMINI_MODEL", "").strip() or "gemini-3.5-flash-lite"
+    return None
+
+
 def generate(body):
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     model = body["model"]

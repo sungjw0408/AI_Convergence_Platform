@@ -2,15 +2,20 @@ const endpoint = "/api/rental-database";
 
 function documents(state, uid) {
   const records = {
-  inquiries: state.inquiries ?? [],
-  memberships: Object.values(state.memberships || {}),
+    inquiries: state.inquiries ?? [],
+    memberships: Object.values(state.memberships || {}),
     listings: state.listings,
     rentals: state.rentals,
     messages: Object.entries(state.messages).flatMap(([rentalId, thread]) =>
       thread.map((message) => ({ ...message, rentalId }))),
     notices: state.notices,
   };
-  if (uid) records.profiles = [{ id: uid, area: state.area, favorites: state.favorites }];
+  if (uid) {
+    const profile = { id: uid, area: state.area, favorites: state.favorites };
+    if (Object.hasOwn(state.displayNames ?? {}, uid)) profile.displayName = state.displayNames[uid];
+    if (Object.hasOwn(state.profilePhotos ?? {}, uid)) profile.photo = state.profilePhotos[uid];
+    records.profiles = [profile];
+  }
   return records;
 }
 
@@ -35,6 +40,7 @@ async function request(uid, options, actor, suffix = "") {
 function applySnapshot(state, uid, snapshot) {
   const records = snapshot.records;
   state.inquiries = records.inquiries ?? [];
+  state.blockedPeriods = records.blockedPeriods ?? [];
   for (const name of ["listings", "rentals", "notices"]) {
     const existing = new Map((state[name] || []).map(record => [record.id, record]));
     records[name] = records[name].map(record => {
@@ -47,14 +53,19 @@ function applySnapshot(state, uid, snapshot) {
   }
   state.memberships = Object.fromEntries((records.memberships || []).map(p => [p.id, p]));
   state.publicReputation = records.publicReputation;
+  state.displayNames = records.displayNames ?? {};
+  state.profilePhotos = records.profilePhotos ?? {};
   state.messages = {};
   for (const record of records.messages.sort((a, b) => a.sentAt - b.sentAt || a.id.localeCompare(b.id))) {
     (state.messages[record.rentalId] ??= []).push(record);
   }
 
-  if (uid && records.profiles?.[0]) {
-    state.area = records.profiles[0].area;
-    state.favorites = records.profiles[0].favorites;
+  if (uid && records.profiles[0]) {
+    const profile = records.profiles[0];
+    state.area = profile.area ?? state.area;
+    state.favorites = profile.favorites ?? [];
+    if (typeof profile.displayName === "string") state.displayNames[uid] = profile.displayName;
+    if (typeof profile.photo === "string") state.profilePhotos[uid] = profile.photo;
   }
 }
 
@@ -88,12 +99,13 @@ export async function connectRentalDatabase(state, uid) {
     });
     return pending;
   };
-  save.refresh = async () => {
+  save.waitForSaves = () => pending;
+  save.refresh = async (force = false) => {
     const queued = pending;
     await queued;
     // A blind review can become public even when nobody writes to the database.
     const refreshExpiry = uid && Date.now() - lastFullRead >= 60000;
-    const result = await request(uid, {}, state.role, refreshExpiry ? "" : "?since=" + observed);
+    const result = await request(uid, {}, state.role, force || refreshExpiry ? "" : "?since=" + observed);
     if (!result.records || queued !== pending) return false;
     applySnapshot(state, uid, result);
     lastFullRead = Date.now();

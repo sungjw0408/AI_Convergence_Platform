@@ -2,16 +2,26 @@
 
 from community_records import can_submit, feedback, now_ms, public_reviews, reputation, valid_use
 import re
+from base64 import b64decode
+from binascii import Error as Base64Error
 from datetime import date, datetime
+from io import BytesIO
 from zoneinfo import ZoneInfo
 
 from google.cloud.firestore_v1.base_query import FieldFilter
+from PIL import Image
+from listing_pricing import deposit_for_value, valid_item_value, valid_pricing_context
+from listing_visibility import LISTING_VISIBILITIES, public_listing
+from rental_lifecycle import calendar_date, held_extension
 
 IDS = re.compile(r"[a-zA-Z0-9_-]{1,128}")
 IMAGE = re.compile(r"data:image/(?:jpeg|png|webp);base64,[a-zA-Z0-9+/]+=*")
 CAPTURE = re.compile(r"capture:[a-f0-9-]{36}")
 
 AREAS = {"죽전동", "보정동"}
+PROFILE_PHOTO_PREFIX = "data:image/jpeg;base64,"
+PROFILE_PHOTO_MAX_LENGTH = 48_000
+PROFILE_NAME_MAX_LENGTH = 48
 CATEGORIES = {"공구", "디지털", "생활용품", "캠핑·레저"}
 
 CHAT_STATUSES = {
@@ -35,6 +45,10 @@ RENTAL_KEYS = {
     "createdAt",
 }
 
+BUSY_STATUSES = ("payment_pending", "confirmed", "handover", "active", "checking", "disputed")
+LISTING_DATE_FIELDS = {"availableFrom", "availableTo"}
+LISTING_EDIT_FIELDS = {"title", "description", "category", "neighborhood", "price"} | LISTING_DATE_FIELDS
+VALUE_SNAPSHOT_KEYS = {"itemValue", "depositPolicy"}
 TRANSITIONS = {
     ("pending", "confirmed"): "lenderId",
     ("pending", "rejected"): "lenderId",
@@ -69,6 +83,33 @@ def text(value, limit, required=False):
         and len(value) <= limit
         and (not required or bool(value.strip()))
     )
+
+
+def valid_profile_photo(value):
+    if value == "":
+        return True
+    if not text(value, PROFILE_PHOTO_MAX_LENGTH, True) or not value.startswith(PROFILE_PHOTO_PREFIX):
+        return False
+    try:
+        raw = b64decode(value.removeprefix(PROFILE_PHOTO_PREFIX), validate=True)
+        with Image.open(BytesIO(raw)) as image:
+            if image.format != "JPEG" or max(image.size) > 256:
+                return False
+            image.load()
+            return True
+    except (Base64Error, OSError, ValueError, Image.DecompressionBombError):
+        return False
+
+
+def signup_profile(fields):
+    if not isinstance(fields, dict) or not {"displayName", "area"} <= set(fields) <= {"displayName", "area", "photo"}:
+        raise ValueError("가입할 때 사용할 이름과 거주 지역을 확인해 주세요.")
+    name, area, photo = fields["displayName"], fields["area"], fields.get("photo", "")
+    if not text(name, PROFILE_NAME_MAX_LENGTH) or not isinstance(area, str) or area not in AREAS:
+        raise ValueError("가입할 때 사용할 이름과 거주 지역을 확인해 주세요.")
+    if not valid_profile_photo(photo):
+        raise ValueError("프로필 사진을 다시 선택해 주세요.")
+    return {"displayName": name.strip(), "area": area, "photo": photo}
 
 
 def integer(value, maximum):
@@ -137,19 +178,63 @@ def account_documents(root, uid, transaction):
         if "feedback" in r:
             r["feedback"] = visible
 
+    linked_items = {rental["itemId"] for rental in rentals.values()}
+    listings = []
+    public_ids = set()
+    for doc in root.collection("listings").stream(transaction=transaction):
+        item = doc.to_dict()
+        if public_listing(item):
+            listings.append(item)
+            public_ids.add(doc.id)
+        elif doc.id in linked_items or (item.get("visibility") == "private" and item.get("owner") == uid):
+            listings.append(item)
+
+    photo_owners = {uid, *(item["owner"] for item in listings if public_listing(item))}
+    for rental in rentals.values():
+        photo_owners.update((rental["renterId"], rental["lenderId"]))
+    for room in inquiries.values():
+        photo_owners.update(room["participants"])
+    named_profiles = (
+        root.collection("profiles")
+        .select(["displayName", "photo"])
+    )
+    display_names, profile_photos = {}, {}
+    for doc in named_profiles.stream(transaction=transaction):
+        info = doc.to_dict()
+        if text(info.get("displayName"), PROFILE_NAME_MAX_LENGTH, True):
+            display_names[doc.id] = info["displayName"]
+        photo = info.get("photo")
+        if doc.id in photo_owners and text(photo, PROFILE_PHOTO_MAX_LENGTH, True) and photo.startswith(PROFILE_PHOTO_PREFIX):
+            profile_photos[doc.id] = photo
+
+    blocked_periods = []
+    now = now_ms()
+    for doc in query(root, "rentals", "status", "in", list(BUSY_STATUSES), transaction):
+        rental = doc.to_dict()
+        if rental["itemId"] not in public_ids and rental["itemId"] not in linked_items:
+            continue
+        extension_end = held_extension(rental, now)
+        blocked_periods.append({
+            "id": rental["id"],
+            "itemId": rental["itemId"],
+            "status": rental["status"],
+            "start": rental["start"],
+            "end": calendar_date(extension_end, rental["timeZone"]).isoformat() if extension_end else rental["end"],
+            "paymentDueAt": rental.get("paymentDueAt"),
+            "after": bool(rental.get("after")),
+        })
+
     return {
+        "blockedPeriods": blocked_periods,
+        "displayNames": display_names,
+        "profilePhotos": profile_photos,
         "inquiries": list(inquiries.values()),
 
         "memberships": [membership] if membership else [],
 
         "publicReputation": summaries,
 
-        "listings": [
-            doc.to_dict()
-            for doc in root.collection("listings").stream(
-                transaction=transaction
-            )
-        ],
+        "listings": listings,
 
         "rentals": list(rentals.values()),
 
@@ -178,56 +263,104 @@ def account_documents(root, uid, transaction):
     }
 
 
-# 물품 등록 검증
-def validate_listing(record, uid, current):
-    require(not current and record.get("owner") == uid)
+def validate_listing_details(record, fields):
+    for key, limit in (("title", 48), ("description", 600)):
+        if key in fields:
+            require(text(record.get(key), limit, True))
+    if "category" in fields:
+        require(record.get("category") in CATEGORIES)
+    if "neighborhood" in fields:
+        require(record.get("neighborhood") in AREAS)
+    if "price" in fields:
+        require(integer(record.get("price"), 10_000_000))
 
-    require(
-        set(record) <= {
-            "id",
-            "title",
-            "description",
-            "category",
-            "neighborhood",
-            "price",
-            "deposit",
-            "image",
-            "availableFrom",
-            "availableTo",
-            "owner",
-            "createdAt",
-            "photos",
-            "coverPhotoId",
-            "inspectionPlan",
-        }
-    )
 
-    require(
-        text(record.get("title"), 48, True)
-        and text(record.get("description"), 600, True)
-    )
+def listing_period(record):
+    start, end = record.get("availableFrom"), record.get("availableTo")
+    if start or end:
+        start, end = day(start), day(end)
+        if start > end:
+            raise ValueError("대여 가능 기간의 시작일과 종료일을 확인해 주세요.")
+        return start, end
+    return None
 
-    require(record.get("category") in CATEGORIES)
-    require(record.get("neighborhood") in AREAS)
 
-    require(
-        integer(record.get("price"), 10_000_000)
-        and integer(record.get("deposit"), 10_000_000)
-    )
+def validate_listing_schedule(root, transaction, record, current):
+    require(all(isinstance(record.get(key, ""), str) for key in LISTING_DATE_FIELDS))
+    period = listing_period(record)
+    if not period:
+        return
 
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    start, end = period
+    if end < today or (record.get("availableFrom") != current.get("availableFrom") and start < today):
+        raise ValueError("새 대여 가능 기간은 오늘 이후 날짜로 설정해 주세요.")
+
+    now = now_ms()
+    for snapshot in query(root, "rentals", "itemId", "==", record["id"], transaction):
+        rental = snapshot.to_dict()
+        if rental["status"] not in ("pending", *BUSY_STATUSES):
+            continue
+        if rental.get("lifecycleVersion") == 1 and (
+            (rental["status"] == "pending" and rental["requestExpiresAt"] <= now)
+            or (rental["status"] == "payment_pending" and rental["paymentDueAt"] <= now)
+        ):
+            continue
+        extension_end = held_extension(rental, now)
+        reserved_end = calendar_date(extension_end, rental["timeZone"]) if extension_end else day(rental["end"])
+        if reserved_end >= today and (start > max(today, day(rental["start"])) or end < reserved_end):
+            raise ValueError("대여 가능 기간에 이미 신청되었거나 진행 중인 거래 날짜를 포함해 주세요.")
+
+
+def validate_listing(record, uid, current, policy, *, root=None, transaction=None):
+    require(record.get("owner") == uid)
+    if current:
+        require(current.get("owner") == uid and current.get("visibility") != "deleted")
+        before = current.get("visibility", "public")
+        after = record.get("visibility", "public")
+        if before != after:
+            require(after in LISTING_VISIBILITIES)
+            updated = {**current, "visibility": after}
+            require(record == updated)
+            return updated
+
+        edits = {key: record[key] for key in LISTING_EDIT_FIELDS
+                 if key in record and record[key] != current.get(key)}
+        if edits:
+            updated = {**current, **edits}
+            require(record == updated)
+            validate_listing_details(updated, edits)
+            if LISTING_DATE_FIELDS.intersection(edits):
+                validate_listing_schedule(root, transaction, updated, current)
+            return updated
+
+    value = record.get("itemValue")
+    require(valid_item_value(value))
+    expected_deposit = deposit_for_value(value, policy)
+    require("deposit" in record and record["deposit"] == expected_deposit
+            and (expected_deposit is None or type(record["deposit"]) is int))
+
+    if current:
+        require(current.get("itemValue") is None)
+        updated = {**current, "itemValue": value, "deposit": expected_deposit}
+        require(record == updated)
+        return updated
+
+    require(set(record) <= {"id", "title", "description", "category", "neighborhood", "price", "deposit",
+                            "image", "availableFrom", "availableTo", "owner", "createdAt",
+                            "photos", "coverPhotoId", "inspectionPlan", "itemValue", "pricingContext"})
+    validate_listing_details(record, LISTING_EDIT_FIELDS)
+    current_month = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m")
+    require(valid_pricing_context(record.get("pricingContext"), value["amountWon"], current_month))
     require(integer(record.get("createdAt"), 2**53 - 1))
 
     image = record.get("image")
     require(image == "" or matches(IMAGE, image))
 
-    if {"photos", "coverPhotoId", "inspectionPlan"} & record.keys():
-        validate_listing_photos(record)
+    validate_listing_photos(record)
 
-    if record.get("availableFrom") or record.get("availableTo"):
-        require(
-            day(record.get("availableFrom"))
-            <= day(record.get("availableTo"))
-        )
+    listing_period(record)
+    return record
 
 
 # 대여 가능 날짜 검증
@@ -474,7 +607,7 @@ def validate_inspection(record, field):
 
 
 # 예약 및 대여 상태 검증
-def validate_rental(root, transaction, uid, record, current):
+def validate_rental(root, transaction, uid, record, current, policy):
     if current and current.get("lifecycleVersion") == 1:
         # Command-only state machine: never accept a client-provided payment/state change.
         allowed = {"inspection", "photoAnalysis", "review", "feedback"}
@@ -482,56 +615,28 @@ def validate_rental(root, transaction, uid, record, current):
     require(matches(IDS, record.get("itemId")))
 
     if not current:
-        require(
-            set(record) == RENTAL_KEYS | {"status"}
-            and record.get("status") == "pending"
-            and record.get("renterId") == uid
-        )
-
-        item = root.collection("listings").document(
-            record["itemId"]
-        ).get(transaction=transaction).to_dict()
-
-        require(
-            item
-            and record.get("lenderId") == item["owner"]
-            and item["owner"] != uid
-        )
-
-        days = check_availability(
-            root,
-            transaction,
-            record,
-            item,
-            confirming=False,
-        )
-
-        require(
-            record["total"] == item["price"] * days
-            and record["deposit"] == item["deposit"]
-        )
-
+        require(record.get("status") == "pending" and record.get("renterId") == uid)
+        item = root.collection("listings").document(record["itemId"]).get(transaction=transaction).to_dict()
+        require(item and record.get("lenderId") == item["owner"] and item["owner"] != uid)
+        require(public_listing(item))
+        value = item.get("itemValue")
+        if not valid_item_value(value):
+            raise ValueError("공급자가 중고 가액과 근거를 추가해야 대여를 신청할 수 있어요.")
+        if policy is None:
+            raise ValueError("보증금 정책이 정해지면 대여를 신청할 수 있어요.")
+        require(set(record) == RENTAL_KEYS | VALUE_SNAPSHOT_KEYS | {"status"})
+        require(record["itemValue"] == value and record["depositPolicy"] == policy)
+        expected_deposit = deposit_for_value(value, policy)
+        days = check_availability(root, transaction, record, item, confirming=False)
+        require(type(record["total"]) is int and type(record["deposit"]) is int
+                and record["total"] == item["price"] * days and record["deposit"] == expected_deposit)
         require(integer(record["createdAt"], 2**53 - 1))
 
         return
 
-    require(
-        uid in (
-            current["renterId"],
-            current["lenderId"],
-        )
-    )
-
-    require(
-        all(
-            record.get(key) == current.get(key)
-            for key in RENTAL_KEYS
-        )
-    )
-
-    previous = current["status"]
-    status = record.get("status")
-
+    require(uid in (current["renterId"], current["lenderId"]))
+    require(all(record.get(key) == current.get(key) for key in RENTAL_KEYS | VALUE_SNAPSHOT_KEYS))
+    previous, status = current["status"], record.get("status")
     require(isinstance(status, str))
 
     allowed = {"status"}
@@ -548,6 +653,8 @@ def validate_rental(root, transaction, uid, record, current):
         )
 
         if status == "confirmed":
+            if not valid_item_value(current.get("itemValue")) or not current.get("depositPolicy"):
+                raise ValueError("중고 가액과 보증금 기준이 저장된 대여 신청만 승인할 수 있어요.")
             item = root.collection("listings").document(
                 record["itemId"]
             ).get(transaction=transaction).to_dict()
@@ -670,8 +777,7 @@ def validate_rental(root, transaction, uid, record, current):
         )
 
 
-# 데이터 저장 및 접근 권한 검증
-def authorize_updates(root, transaction, uid, updates):
+def authorize_updates(root, transaction, uid, updates, policy=None):
     from rental_database import app_fields
 
     changes = {
@@ -700,25 +806,17 @@ def authorize_updates(root, transaction, uid, updates):
         # 사용자 프로필
         if name == "profiles":
             favorites = record.get("favorites")
-
-            require(
-                record_id == uid
-                and set(record) == {
-                    "id",
-                    "area",
-                    "favorites",
-                }
-                and record.get("area") in AREAS
-            )
-
-            require(
-                isinstance(favorites, list)
-                and len(favorites) <= 500
-                and all(
-                    matches(IDS, item)
-                    for item in favorites
-                )
-            )
+            required = {"id", "area", "favorites"}
+            require(record_id == uid and required <= set(record) <= required | {"displayName", "photo"}
+                    and isinstance(record["area"], str) and record["area"] in AREAS)
+            require(isinstance(favorites, list) and len(favorites) <= 500
+                    and all(matches(IDS, item) for item in favorites))
+            if "displayName" in record:
+                require(text(record["displayName"], PROFILE_NAME_MAX_LENGTH))
+                record["displayName"] = record["displayName"].strip()
+            if "photo" in record and record["photo"] != (current or {}).get("photo"):
+                require(valid_profile_photo(record["photo"]))
+            record = {**(current or {}), **record}
 
         # 구독 및 혜택
         elif name == "memberships":
@@ -734,7 +832,7 @@ def authorize_updates(root, transaction, uid, updates):
 
         # 물품 등록
         elif name == "listings":
-            validate_listing(record, uid, current)
+            record = validate_listing(record, uid, current, policy, root=root, transaction=transaction)
 
         # 예약 및 대여
         elif name == "rentals":
@@ -744,6 +842,7 @@ def authorize_updates(root, transaction, uid, updates):
                 uid,
                 record,
                 current,
+                policy,
             )
 
         # 사전 문의 채팅방
@@ -792,7 +891,7 @@ def authorize_updates(root, transaction, uid, updates):
                     )
                 )
 
-                require(bool(partner_items))
+                require(any(public_listing(item.to_dict()) for item in partner_items))
 
                 pair = tuple(sorted(participants))
 

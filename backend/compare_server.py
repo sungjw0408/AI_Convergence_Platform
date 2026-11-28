@@ -1,12 +1,18 @@
 """Run with python backend/compare_server.py --port 8093 from the repository."""
 import argparse
+import json
 import os
 from pathlib import Path
 from threading import Lock
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
+from markupsafe import escape
 from werkzeug.exceptions import RequestEntityTooLarge
 from rental_database import register_database
+from listing_pricing import load_deposit_policy
+from listing_assistance import suggest_listing
+from listing_price_advice import suggest_price, validate_price_request
+from listing_market_prices import market_prices
 from item_assistant import room_assist
 from photo_compare import compare, load_model, read_photo
 from photo_evaluation import run_evaluation
@@ -15,21 +21,73 @@ app = Flask(__name__, static_folder=str(Path(__file__).resolve().parents[1] / "f
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 inference_lock = Lock()
 room_lock = Lock()
+listing_lock = Lock()
+deposit_policy = load_deposit_policy(os.environ.get("RENTO_DEPOSIT_POLICY"))
 accounts_enabled = bool(os.environ.get("RENTO_FIREBASE_WEB_API_KEY") or os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"))
 if accounts_enabled:
     from accounts import configure_accounts
     configure_accounts(app)
-database_enabled = register_database(app, account_mode=accounts_enabled)
+database_enabled = register_database(app, account_mode=accounts_enabled, deposit_policy=deposit_policy)
 
 
 @app.get("/")
 @app.get("/index.html")
 def home():
+    if not database_enabled and deposit_policy is None:
+        return app.send_static_file("index.html")
+    metadata = []
     if database_enabled:
-        html = (Path(app.static_folder) / "index.html").read_text(encoding="utf-8")
         mode = "accounts" if accounts_enabled else "firestore"
-        return html.replace("<head>", f'<head><meta name="rento-database" content="{mode}"><meta name="rento-lifecycle" content="enabled">'), {"Cache-Control": "no-store"}
-    return app.send_static_file("index.html")
+        metadata.append(f'<meta name="rento-database" content="{mode}">')
+        metadata.append('<meta name="rento-lifecycle" content="enabled">')
+    if deposit_policy is not None:
+        metadata.append(f'<meta name="rento-deposit-policy" content="{escape(json.dumps(deposit_policy))}">')
+    html = (Path(app.static_folder) / "index.html").read_text(encoding="utf-8")
+    return html.replace("<head>", "<head>" + "".join(metadata)), {"Cache-Control": "no-store"}
+
+
+@app.post("/api/listing-assistance")
+def listing_assistance():
+    origin = request.headers.get("Origin")
+    if origin and origin != request.host_url.rstrip("/"):
+        return jsonify(error="같은 앱에서만 요청할 수 있어요."), 403
+    if not request.is_json or not 0 < (request.content_length or 0) <= 4096:
+        return jsonify(error="물품 정보를 확인해 주세요."), 400
+    if not listing_lock.acquire(blocking=False):
+        return jsonify(error="등록 제안을 처리하고 있어요. 잠시 후 다시 시도해 주세요."), 429
+    try:
+        return jsonify(suggest_listing(request.get_json(silent=True)))
+    except ValueError as error:
+        return jsonify(error=str(error)), 400
+    except RuntimeError as error:
+        return jsonify(error=str(error)), 503
+    finally:
+        listing_lock.release()
+
+
+@app.post("/api/listing-price-advice")
+def listing_price_advice():
+    origin = request.headers.get("Origin")
+    if origin and origin != request.host_url.rstrip("/"):
+        return jsonify(error="같은 앱에서만 요청할 수 있어요."), 403
+    if not request.is_json or not 0 < (request.content_length or 0) <= 4096:
+        return jsonify(error="추천 조건을 확인해 주세요."), 400
+    if not listing_lock.acquire(blocking=False):
+        return jsonify(error="렌토 추천을 처리하고 있어요. 잠시 후 다시 시도해 주세요."), 429
+    try:
+        criteria = validate_price_request(request.get_json(silent=True))
+        if criteria["kind"] == "value":
+            return jsonify(suggest_price(criteria, (), market_prices(criteria)))
+        load_listings = app.extensions.get("rento_price_listings")
+        uid = (getattr(g, "account", None) or {}).get("uid")
+        listings = load_listings(criteria["category"], uid) if load_listings else ()
+        return jsonify(suggest_price(criteria, listings))
+    except ValueError as error:
+        return jsonify(error=str(error)), 400
+    except RuntimeError as error:
+        return jsonify(error=str(error)), 503
+    finally:
+        listing_lock.release()
 
 
 @app.post("/api/ai-room")

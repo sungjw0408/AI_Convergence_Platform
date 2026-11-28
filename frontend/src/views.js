@@ -1,9 +1,12 @@
-import { reservationInputs, chargedDays, lifecyclePanel } from "./rental-lifecycle.js?v=team2-develop-5";
+import { profileImage } from "./accounts.js";
+import { inquiryPartner } from "./inquiry.js";
+import { depositBlock, depositPolicyLabel, listingDeposit, VALUE_PENDING } from "./listing-pricing.js";
+import { reservationInputs, chargedDays, lifecyclePanel } from "./rental-lifecycle.js?v=team2-compact-4";
 import { comparisonResult } from "./compare.js";
 import { inspectionCard } from "./inspection-view.js";
 import { photoUrl } from "./photo-store.js";
 import { itemGallery } from "./listing-photo-view.js";
-import { registrationForm } from "./listing-registration-view.js";
+import { registrationForm, valuationFields } from "./listing-registration-view.js";
 import { newListingDraft } from "./listing-photos.js";
 import { faces } from "./capture.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
@@ -34,7 +37,7 @@ function image(item, classes = "", label = "") {
     : `<span class="photo-placeholder ${classes}" aria-label="등록된 사진 없음">${icon("photo")}</span>`;
 }
 
-export function listingRows(items, isFavorite, availability) {
+export function listingRows(items, isFavorite, availability, recommendations = new Map(), displayNames = {}, managing = false, profilePhotos = {}) {
   if (!items.length) {
     return empty(
       "조건에 맞는 물품이 없어요",
@@ -45,6 +48,7 @@ export function listingRows(items, isFavorite, availability) {
   return items.map((item) => {
     const selected = isFavorite(item.id);
     const status = availability(item);
+    const reason = recommendations.get(item.id)?.join(" · ");
 
     return `
       <article class="listing-with-owner">
@@ -61,6 +65,8 @@ export function listingRows(items, isFavorite, availability) {
                 ${escape(item.neighborhood)}
                 ${item.distance ? ` · ${escape(item.distance)}` : ""}
               </p>
+
+              ${reason ? `<p class="hint">추천 이유 · ${escape(reason)}</p>` : ""}
 
               <div class="listing-bottom">
                 <strong class="rate">
@@ -88,26 +94,26 @@ export function listingRows(items, isFavorite, availability) {
            href="#person/${encodeURIComponent(item.owner)}">
 
           <span class="owner-avatar">
-            <svg width="22" height="22"
-                 viewBox="0 0 24 24"
-                 fill="none"
-                 stroke="currentColor"
-                 stroke-width="1.8"
-                 stroke-linecap="round">
-              <circle cx="12" cy="8" r="4"/>
-              <path d="M4 21v-2a8 8 0 0 1 16 0v2"/>
-            </svg>
+            ${profileImage(profilePhotos[item.owner], escape) || icon("user")}
           </span>
 
           <span class="owner-info">
             <strong>
-              ${escape(people[item.owner]?.name ?? "공급자 프로필")}
+              ${escape(displayNames[item.owner] || people[item.owner]?.name || "공급자 프로필")}
             </strong>
             <small>프로필 및 거래 후기 보기</small>
           </span>
 
           <span class="owner-arrow">›</span>
         </a>
+        ${managing ? `<div class="listing-management">
+          <p class="hint listing-management-period">${item.availableFrom && item.availableTo
+            ? `대여 가능 기간 · ${escape(dates(item.availableFrom, item.availableTo))}` : "대여 가능 기간 · 제한 없음"}</p>
+          <button class="button secondary" type="button" data-action="edit-listing" data-id="${escape(item.id)}" aria-label="${escape(item.title)} 수정">수정</button>
+          <button class="button secondary" type="button" data-action="manage-listing" data-id="${escape(item.id)}" data-visibility="${item.visibility === "private" ? "public" : "private"}"
+            aria-label="${escape(item.title)} ${item.visibility === "private" ? "다시 공개" : "비공개"}">${item.visibility === "private" ? "다시 공개" : "비공개"}</button>
+          <button class="button secondary" type="button" data-action="manage-listing" data-id="${escape(item.id)}" data-visibility="deleted" aria-label="${escape(item.title)} 삭제">삭제</button>
+        </div>` : ""}
 
       </article>`;
   }).join("");
@@ -139,40 +145,67 @@ export function home({ area, query, category, date, maxPrice, rows, unread }) {
       </div>
       ${filterSummary ? `<div class="applied-filter">${filterSummary}<button class="icon-button" data-action="clear-filters" aria-label="날짜 및 가격 필터 지우기">${icon("close")}</button></div>` : ""}
       <section aria-labelledby="listing-title">
-        <div class="feed-title"><h2 id="listing-title">우리 동네 대여 물품</h2><a class="button primary add-link" href="#new">${icon("plus")}물품 등록</a></div>
+        <div class="feed-title"><h2 id="listing-title">우리 동네 대여 물품 <small class="hint">추천순</small></h2><a class="button primary add-link" href="#new">${icon("plus")}물품 등록</a></div>
         <div id="listings" aria-live="polite">${rows}</div>
       </section>
     </div>`;
 }
 
-export function rentalEstimate(item, start, end) {
-  const days = chargedDays(start, end);
-  if (!(days >= 1)) return "시작·반납 날짜와 시각을 선택해 주세요.";
+export function rentalEstimate(item, start, end, policy = null, lifecycleMode = false) {
+  const deposit = listingDeposit(item, policy);
+  if (deposit === null) return depositBlock(item, policy);
+  const days = lifecycleMode ? chargedDays(start, end) : rentalDays(start, end);
+  if (!(days >= 1)) return lifecycleMode ? "시작·반납 날짜와 시각을 선택해 주세요." : "시작일과 종료일을 선택해 주세요.";
   const fee = item.price * days;
-  return `대여료 ${won(fee)} (${days}일) + 보증금 ${won(item.deposit ?? 0)} = ${won(fee + (item.deposit ?? 0))}`;
+  return `대여료 ${won(fee)} (${days}일) + 보증금 ${won(deposit)} = ${won(fee + deposit)}`;
 }
 
-export function itemPage(item, role, date, selectedPhoto) {
+export function itemPage(item, role, date, selectedPhoto, policy = null, requireValue = false, lifecycleMode = false) {
+  const blocked = depositBlock(item, policy, requireValue);
+  const deposit = blocked ? null : listingDeposit(item, policy);
+  const owner = item.owner === role;
+  let action;
+  if (owner && blocked === VALUE_PENDING) {
+    action = `<form data-form="listing-valuation" data-id="${escape(item.id)}" class="form-card">
+      ${valuationFields({}, policy, escape)}
+      <p class="hint">가액을 추가해도 과거 거래에 저장된 금액은 유지돼요.</p>
+      <p class="form-error" role="alert" hidden></p>
+      ${button("중고 가액 저장")}</form>`;
+  } else if (owner || role === "admin") {
+    const notice = owner && requireValue ? "내가 등록한 물품이에요."
+      : "대여자 프로필로 전환하면 이 물품에 대여를 신청할 수 있어요.";
+    action = `<p class="notice">${notice}</p>`;
+  } else if (blocked) {
+    const notice = blocked === VALUE_PENDING ? "공급자가 중고 가액과 근거를 추가하면 대여 조건을 확인할 수 있어요."
+      : "보증금 정책이 정해지면 대여를 신청할 수 있어요.";
+    action = `<p class="notice">${notice}</p>`;
+  } else {
+    action = `<form data-form="request" data-id="${escape(item.id)}" class="form-card">
+      <h2>대여 신청</h2>
+      ${lifecycleMode ? reservationInputs(date) : dateInputs(date)}
+      <p id="estimate" aria-live="polite">${rentalEstimate(item, date.start, date.end, policy, lifecycleMode)}</p>
+      <p class="hint">${lifecycleMode
+        ? "24시간 단위로 올림해 대여료를 계산해요. 공급자 승인 후 테스트 결제를 마치면 예약이 확정돼요."
+        : "신청 금액을 거래 내역에 저장해요. 이 시연 화면에서는 실제 금액을 청구하지 않아요."}</p>
+      <p class="form-error" role="alert" hidden></p>
+      ${button("대여 신청하기")}
+    </form>`;
+  }
   return pageHeader("물품 상세", "#home") + `<div class="content">
     ${itemGallery(item, selectedPhoto, escape)}
+    ${item.photoReference?.startsWith("https://") ? `<p class="hint"><a href="${escape(item.photoReference)}" target="_blank" rel="noopener noreferrer">참고 사진 출처</a></p>` : ""}
     <section class="detail-info">
       <p class="muted">${escape(item.category)} · ${escape(item.neighborhood)}</p>
       <h2>${escape(item.title)}</h2>
       <p class="detail-rate">${won(item.price)} <span>/ 일</span></p>
-      <p>보증금 · ${item.deposit ? won(item.deposit) + " (거래당 1회)" : "없음"}</p>
+      ${item.itemValue ? `<p>공급자가 입력한 현재 중고 가액 · ${won(item.itemValue.amountWon)}</p>` : ""}
+      <p>보증금 · ${blocked || won(deposit) + (item.itemValue ? " (거래당 1회)" : " (시연 금액)")}</p>
+      ${item.itemValue ? `<p class="hint">${policy ? `${escape(depositPolicyLabel(policy))} · ` : ""}가액 근거 확인 대기</p>` : ""}
       <p>${escape(item.description)}</p>
-      ${item.weekends ? '<p class="availability">주말 대여 가능</p>' : ""}
+      ${item.weekends ? '<p class="availability">주말 대여 전용</p>' : ""}
       ${item.availableFrom ? `<p class="availability">대여 가능 기간 · ${dates(item.availableFrom, item.availableTo)}</p>` : ""}
     </section>
-    ${role === "admin" || role === item.owner ? '<p class="notice">대여자 프로필로 전환하면 이 물품에 대여를 신청할 수 있어요.</p>' :
-    `<form data-form="request" data-id="${item.id}" class="form-card">
-      <h2>대여 신청</h2>
-      ${reservationInputs(date)}
-      <p id="estimate" aria-live="polite">${rentalEstimate(item, date.start, date.end)}</p>
-      <p class="hint">24시간을 1일로 올림해 계산해요. 공급자 승인 후 실제 청구 없는 테스트 결제를 마치면 예약이 확정돼요. 보증금은 물품에 기록된 금액을 사용하며 비율 정책은 미정이에요.</p>
-      <p class="form-error" role="alert" hidden></p>
-      ${button("대여 신청하기")}
-    </form>`}
+    ${action}
   </div>`;
 }
 
@@ -184,13 +217,13 @@ export function dateInputs(date = {}, { required = true } = {}) {
   </div>`;
 }
 
-export function registerPage(role, area, draft = newListingDraft(area)) {
+export function registerPage(role, area, draft = newListingDraft(area), policy = null) {
   const header = draft.step > 0 && role !== "admin"
     ? `<header class="page-header"><button class="icon-button" data-action="listing-prev" aria-label="이전 단계">${icon("back")}</button><h1>물품 등록</h1></header>`
     : pageHeader("물품 등록", "#home");
   return header + `<div class="content registration-content">${role === "admin"
     ? '<p class="notice">대여자 또는 공급자 프로필에서 물품을 등록할 수 있어요.</p>'
-    : registrationForm(draft, escape)}</div>`;
+    : registrationForm(draft, escape, policy)}</div>`;
 }
 
 function rentalRow(rental, item, destination = "trade") {
@@ -243,6 +276,7 @@ export function tradePage(rental, item, role, feedback, selectedView, lifecycleM
       ${image(item, "trade-thumbnail")}
       <div><h2>${escape(item.title)}</h2><p class="muted">${dates(rental.start, rental.end)}</p>
         <p>신청 대여료 ${won(rental.total)} · 보증금 ${won(rental.deposit ?? 0)}</p>
+        ${rental.itemValue ? `<p class="muted">거래 당시 가액 ${won(rental.itemValue.amountWon)}${rental.depositPolicy ? ` · 정책 ${escape(rental.depositPolicy.version)}` : ""}</p>` : ""}
         <strong>신청 당시 합계 ${won(rental.total + (rental.deposit ?? 0))}</strong></div>
       ${badge(status)}
     </section>
@@ -257,18 +291,42 @@ export function tradePage(rental, item, role, feedback, selectedView, lifecycleM
     ${(owns || borrows) ? `<a href="#person/${escape(owns ? rental.renterId : rental.lenderId)}">상대방 프로필</a>` : ""}
     ${Object.entries(publicFeedback(rental)).map(([side, review]) => `<section class="notice"><strong>${side === "renter" ? "대여자" : "공급자"}가 남긴 후기 · ${review.rating}점</strong><p>${escape(review.text)}</p></section>`).join("")}
     ${status === "complete" && rental.completedAt && !Object.keys(publicFeedback(rental)).length ? '<p class="hint">후기는 양쪽 작성 또는 거래 완료 7일 후 공개돼요.</p>' : ""}
-    ${lifecycleMode && rental.lifecycleVersion !== 1 ? '<p class="notice">기존 날짜 전용 시연 거래는 조회만 가능해요. 날짜·시각을 선택해 새로 신청하면 테스트 결제와 자동 반납 흐름을 이용할 수 있어요.</p>' : actions ? `<div class="action-row">${actions}</div>` : ""}
+    ${lifecycleMode && rental.lifecycleVersion !== 1 && status !== "complete"
+      ? '<p class="notice">이 날짜 전용 거래는 거래 내역에서 확인할 수 있어요. 새로 신청하면 테스트 결제와 자동 반납 흐름을 이용할 수 있어요.</p>'
+      : actions ? `<div class="action-row">${actions}</div>` : ""}
   </div>`;
 }
 
-const partnerName = (rental, role) =>
-  people[role === rental.renterId ? rental.lenderId : rental.renterId]?.name ?? "거래 상대";
+function chatProfile(id, profiles, fallback = "채팅 상대") {
+  return { id, name: profiles.displayNames?.[id] || people[id]?.name || fallback, photo: profiles.profilePhotos?.[id] };
+}
+
+function rentalChatProfile(rental, role, profiles) {
+  const renter = role === rental.renterId;
+  return chatProfile(renter ? rental.lenderId : rental.renterId, profiles, renter ? "공급자 프로필" : "대여자 프로필");
+}
+
+function chatAvatar(profile) {
+  return `<span class="avatar">${profileImage(profile.photo, escape) || icon("user")}</span>`;
+}
+
+function chatThreadHeader(profile) {
+  const name = escape(profile.name);
+  return `<header class="page-header">
+    <a class="icon-button" href="#chat" aria-label="뒤로">${icon("back")}</a>
+    <a class="chat-thread-profile" href="#person/${encodeURIComponent(profile.id)}" aria-label="${name} 프로필 보기">
+      ${chatAvatar(profile)}
+      <h1>${name}</h1>
+      ${icon("right")}
+    </a>
+  </header>`;
+}
 const chatDay = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" });
 const chatClock = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2-digit" });
 const messageDate = (message) => Number.isFinite(message?.sentAt)
   && Number.isFinite(new Date(message.sentAt).getTime()) ? new Date(message.sentAt) : null;
 
-export function chatPage(rentals, catalog, role, threads, canChat, inquiries = []) {
+export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [], profiles = {}) {
   const conversations = [
     ...rentals
       .filter(r => (r.renterId === role || r.lenderId === role) && canChat(r))
@@ -293,31 +351,23 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
 
   return pageHeader("채팅") + `
     <div class="content chat-list">
-      <p class="page-description chat-description">
-        이웃과 나누는 대화, 더 편안한 거래
-      </p>
-
       ${conversations.length
         ? conversations.map(({id, rental, room, last}) => {
           const item = rental ? catalog(rental.itemId) : null;
 
-          const partnerId = room
-            ? room.participants.find(p => p !== role)
-            : rental.renterId === role
-              ? rental.lenderId
-              : rental.renterId;
-
-          const partner = people[partnerId]?.name ?? "이웃";
+          const partner = room
+            ? chatProfile(inquiryPartner(room, role), profiles)
+            : rentalChatProfile(rental, role, profiles);
           const count = unread(threads[id], role);
           const time = messageDate(last);
 
           return `
             <a class="conversation-row" href="#chat/${escape(id)}">
-              <span class="avatar">${icon("user")}</span>
+              ${chatAvatar(partner)}
 
               <div class="conversation-summary">
                 <div class="conversation-heading">
-                  <strong>${escape(partner)}</strong>
+                  <strong>${escape(partner.name)}</strong>
 
                   ${rental
                     ? badge(rental.status)
@@ -359,9 +409,9 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
     </div>`;
 }
 
-export function inquiryPage(room, messages, role) {
-  const partnerId = room.participants.find(p => p !== role);
-  const partner = escape(people[partnerId]?.name ?? "이웃");
+export function inquiryPage(room, messages, role, profiles = {}) {
+  const profile = chatProfile(inquiryPartner(room, role), profiles);
+  const partner = escape(profile.name);
 
   let lastDay = null;
 
@@ -392,22 +442,8 @@ export function inquiryPage(room, messages, role) {
       </div>`;
   }).join("");
 
-  return pageHeader(partner, "#chat") + `
+  return chatThreadHeader(profile) + `
     <div class="content stack conversation-content">
-
-      <a class="conversation-item"
-         href="#person/${encodeURIComponent(partnerId)}">
-
-        <span class="avatar">${icon("user")}</span>
-
-        <div>
-          <strong>${partner}</strong>
-          <p>상대방 프로필 보기</p>
-        </div>
-
-        ${icon("right")}
-      </a>
-
       <div class="messages chat-history"
            role="log"
            aria-label="대화 내역"
@@ -450,8 +486,9 @@ export function inquiryPage(room, messages, role) {
     </div>`;
 }
 
-export function conversationPage(rental, item, messages, role) {
-  const partner = escape(partnerName(rental, role));
+export function conversationPage(rental, item, messages, role, profiles = {}) {
+  const profile = rentalChatProfile(rental, role, profiles);
+  const partner = escape(profile.name);
   let lastDay = null;
 
   const bubbles = messages.map((message, index) => {
@@ -478,7 +515,7 @@ export function conversationPage(rental, item, messages, role) {
       </div>`;
   }).join("");
 
-  return pageHeader(escape(item.title), "#chat") + `
+  return chatThreadHeader(profile) + `
     <div class="content stack conversation-content">
 
       <a class="conversation-item" href="#trade/${escape(rental.id)}">
@@ -494,7 +531,7 @@ export function conversationPage(rental, item, messages, role) {
            role="log"
            aria-label="대화 내역"
            tabindex="0">
-        ${bubbles || empty("첫 메시지를 보내보세요", "이웃과 대화를 시작해 보세요.")}
+        ${bubbles || empty("첫 메시지를 보내보세요", "거래에 관해 궁금한 점을 물어보세요.")}
       </div>
 
       <form class="compose"
@@ -528,9 +565,16 @@ export function conversationPage(rental, item, messages, role) {
     </div>`;
 }
 
-export function profilePage(role, savedCount, listingCount, account = null) {
+export function profilePage(role, savedCount, listingCount, account = null, profile = {}) {
+  const displayName = profile.displayName ?? account?.displayName;
   return pageHeader("내 정보") + `<div class="content stack profile-content">
-    <div class="profile"><div class="avatar">${icon("user")}</div><div><p class="eyebrow">반가워요!</p><h2>${account ? "내 계정" : people[role].name + "님"}</h2><p class="muted">${account ? escape(account.email) : people[role].neighborhood + " · 데모 프로필"}</p></div></div>
+    <div class="profile">
+      <div class="avatar">${profileImage(profile.photo, escape) || icon("user")}</div>
+      <div><h2>${account ? escape(displayName ? displayName + "님" : "내 계정") : people[role].name + "님"}</h2>
+      <p class="muted">${account ? escape(account.email) : escape(people[role].neighborhood + " · 데모 프로필")}</p>
+      ${account && profile.area ? `<p class="muted">거주 지역 · ${escape(profile.area)}</p>` : ""}</div>
+    </div>
+    ${account ? '<button class="button secondary" type="button" data-action="edit-profile">프로필 수정</button>' : ""}
     <div class="profile-stats"><a href="#saved"><strong>${savedCount}</strong><span>관심 물품</span></a><a href="#my-listings"><strong>${listingCount}</strong><span>등록한 물품</span></a><a href="#rentals">${icon("calendar")}<span>대여 내역</span></a></div>
     <section class="profile-section"><h2>나의 활동</h2><div class="menu-list">
       <a href="#rentals">${icon("calendar")}대여 내역${icon("right")}</a>

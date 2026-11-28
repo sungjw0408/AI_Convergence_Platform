@@ -2,10 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import "fake-indexeddb/auto";
+import { localDay } from "../src/model.js";
 import { photoBlob } from "../src/photo-store.js";
 
 test("multi-angle registration persists originals and cover; gallery keeps dates; trade needs new photos", async () => {
-  const dom = new JSDOM('<main id="screen"></main><nav id="navigation"></nav><dialog id="dialog"></dialog><div id="toast" hidden></div>',
+  const dom = new JSDOM(`<meta name="rento-deposit-policy" content='{"version":"test-only","rateBps":3000,"minWon":null,"maxWon":null}'><main id="screen"></main><nav id="navigation"></nav><dialog id="dialog"></dialog><div id="toast" hidden></div>`,
     { url: "http://localhost:8790/#new", pretendToBeVisual: true });
   const { window } = dom;
   Object.assign(globalThis, { window, document: window.document, localStorage: window.localStorage, location: window.location });
@@ -23,15 +24,28 @@ test("multi-angle registration persists originals and cover; gallery keeps dates
   window.HTMLCanvasElement.prototype.toBlob = (cb) => cb(new Blob([`listing-camera-${++counter}`], { type: "image/png" }));
   globalThis.FormData = class {
     constructor(form) { this.values = form ? [...new window.FormData(form)] : []; }
+    [Symbol.iterator]() { return this.values[Symbol.iterator](); }
     get(key) { return this.values.find(([k]) => k === key)?.[1] ?? null; }
     getAll(key) { return this.values.filter(([k]) => k === key).map(([, value]) => value); }
+  };
+  const fetchBefore = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (path, options) => {
+    assert.equal(path, "/api/listing-price-advice");
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    const amountWon = request.kind === "rate" ? 5000 : 30000;
+    return Response.json({ amountWon, references: [
+      { title: "비교 드릴 A", amountWon: amountWon - 1000, source: "공개 자료", url: "https://example.com/a" },
+      { title: "비교 드릴 B", amountWon: amountWon + 1000, source: "공개 자료", url: "https://example.com/b" },
+    ] });
   };
   const key = "neighbor-storage-demo-v1";
   localStorage.setItem(key, JSON.stringify({ role: "lender" }));
   const wait = async (predicate) => { for (let i=0;i<200;i++) { if (predicate()) return; await new Promise((r) => setTimeout(r,2)); } assert.fail("UI did not settle"); };
   const click = (selector) => { const el = document.querySelector(selector); assert.ok(el, selector); el.click(); };
   const fill = (name, value) => { const el = document.querySelector(`[name="${name}"]`); el.value = value; el.dispatchEvent(new window.Event("input", { bubbles:true })); el.dispatchEvent(new window.Event("change", { bubbles:true })); };
-  const submit = () => document.querySelector('[data-form="register"]').dispatchEvent(new window.Event("submit", { bubbles:true, cancelable:true }));
+  const submit = (name = "register") => document.querySelector(`[data-form="${name}"]`).dispatchEvent(new window.Event("submit", { bubbles:true, cancelable:true }));
   try {
     await import("../src/app.js?listing-test");
     const step = () => Number(document.querySelector('[data-form="register"]').dataset.step);
@@ -45,14 +59,32 @@ test("multi-angle registration persists originals and cover; gallery keeps dates
     const photoStep = () => document.querySelectorAll(".registration-steps li")[1];
     assert.equal(photoStep().classList.contains("done"), false);
     assert.equal(photoStep().querySelector("svg"), null);
-    fill("price", "5000"); fill("deposit", "10000");
+    assert.deepEqual([...document.querySelectorAll(".listing-term h3")].map((heading) => heading.textContent),
+      ["하루 대여료", "보증금", "대여 가능 기간"]);
+    assert.equal(document.querySelector('[name="expectedRentalDays"], [name="valueWon"], [name="condition"]'), null);
+    click('[data-action="listing-price-recommend"][data-id="rate"]');
+    fill("modelName", "비교용 모델"); fill("condition", "사용감 있음");
+    submit("listing-price-advice");
+    await wait(() => document.querySelector("#dialog .listing-price-result"));
+    assert.match(document.querySelector("#dialog .listing-price-result").textContent, /5,000원/);
+    assert.equal(document.querySelector('[name="price"]').value, "");
+    click('[data-action="listing-apply-price"]');
+    assert.equal(document.querySelector('[name="price"]').value, "5000");
+    click('[data-action="listing-price-recommend"][data-id="value"]');
+    assert.equal(document.querySelector('#dialog [name="condition"]').value, "사용감 있음");
+    submit("listing-price-advice");
+    await wait(() => document.querySelector("#dialog .listing-price-result"));
+    assert.match(document.querySelector("#dialog .listing-price-result").textContent, /예상 보증금 9,000원/);
+    click('[data-action="listing-apply-price"]');
+    assert.match(document.querySelector(".listing-term-quote").textContent, /9,000원/);
+    assert.deepEqual(requests.map((request) => request.kind), ["rate", "value"]);
     submit(); assert.equal(step(), 2);
     assert.equal(document.querySelector("#dialog").open, true);
     assert.match(document.querySelector("#dialog").textContent, /사진 촬영 단계가 완료되지 않았어요/);
     assert.equal(JSON.parse(localStorage.getItem(key)).listings?.length || 0, 0);
     click('#dialog [data-action="close"]');
     assert.equal(document.querySelector('[name="price"]').value, "5000");
-    click('[data-action="listing-review-photos"]'); assert.equal(step(), 1);
+    click('.registration-actions [data-action="listing-prev"]'); assert.equal(step(), 1);
     assert.equal(document.querySelector('input[type="file"]'), null);
     click('[data-action="listing-camera"]'); click('[data-camera="start"]');
     await wait(() => !document.querySelector('[data-camera="shoot"]').hidden);
@@ -97,14 +129,17 @@ test("multi-angle registration persists originals and cover; gallery keeps dates
     assert.ok(photoStep().querySelector("svg"));
     fill("price", "");
     submit(); assert.match(document.querySelector(".form-error").textContent, /대여료/);
-    fill("price", "5000"); fill("deposit", "10000");
+    fill("price", "5000");
     // Opening the final photo review preserves entered terms.
-    click('[data-action="listing-review-photos"]'); assert.equal(step(), 1);
+    click('.registration-actions [data-action="listing-prev"]'); assert.equal(step(), 1);
     submit(); assert.equal(step(), 2);
     assert.equal(document.querySelector('[name="price"]').value, "5000");
     submit(); await wait(() => JSON.parse(localStorage.getItem(key)).listings?.length === 1);
     const item = JSON.parse(localStorage.getItem(key)).listings[0];
-    assert.equal(item.photos.length, 4); assert.equal(item.coverPhotoId, coverId); assert.equal(item.deposit, 10000);
+    assert.equal(item.photos.length, 4); assert.equal(item.coverPhotoId, coverId); assert.equal(item.deposit, 9000);
+    assert.equal(item.itemValue.amountWon, 30000);
+    assert.match(item.itemValue.evidence, /https:\/\/example.com\/a/);
+    assert.equal(item.pricingContext.modelName, "비교용 모델");
     assert.equal(item.image, item.photos[1].source);
     assert.equal(await (await photoBlob(item.photos[0].source)).text(), "listing-camera-1");
     assert.equal(await (await photoBlob(item.photos[1].source)).text(), "listing-camera-5");
@@ -113,12 +148,22 @@ test("multi-angle registration persists originals and cover; gallery keeps dates
     location.hash = "#profile"; await wait(() => document.querySelector('[data-action="role"][data-id="renter"]'));
     click('[data-action="role"][data-id="renter"]'); location.hash = `#item/${item.id}`;
     await wait(() => document.querySelector(".item-gallery-thumbnails"));
-    fill("start", "2026-11-28T09:00"); fill("end", "2026-11-29T18:00");
+    const start = localDay(new Date(Date.now() + 2 * 86400000));
+    const end = localDay(new Date(Date.now() + 3 * 86400000));
+    fill("start", start); fill("end", end);
     click(`[data-action="listing-gallery"][data-id="${item.photos[0].id}"]`);
-    assert.equal(document.querySelector('[name="start"]').value, "2026-11-28T09:00");
+    assert.equal(document.querySelector('[name="start"]').value, start);
     assert.equal(document.querySelectorAll(".item-gallery-thumbnails button").length, 4);
     document.querySelector('[data-form="request"]').dispatchEvent(new window.Event("submit",{bubbles:true,cancelable:true}));
-    await wait(() => document.querySelector(".form-error")?.textContent.includes("거래 서버"));
-    assert.equal(JSON.parse(localStorage.getItem(key)).rentals.length, 0);
-  } finally { document.querySelectorAll("dialog").forEach((d)=>d.close()); dom.window.close(); }
+    await wait(() => JSON.parse(localStorage.getItem(key)).rentals.length === 1);
+    const [rental] = JSON.parse(localStorage.getItem(key)).rentals;
+    assert.equal(rental.before, undefined);
+    assert.equal(rental.deposit, 9000);
+    assert.equal(rental.itemValue.amountWon, 30000);
+    assert.equal(rental.depositPolicy.version, "test-only");
+  } finally {
+    globalThis.fetch = fetchBefore;
+    document.querySelectorAll("dialog").forEach((dialog) => dialog.close());
+    dom.window.close();
+  }
 });
