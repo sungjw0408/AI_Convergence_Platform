@@ -99,7 +99,7 @@ class LifecycleTests(unittest.TestCase):
     def test_registered_baseline_partial_reshoot_and_both_party_confirmation(self):
         plan = {'views':[{'id':'front'},{'id':'back'}], 'checks':[{'id':'power'}]}
         old_time = '2026-10-01T00:00:00Z'
-        original = {'id':'registered-front', 'source':'data:image/png;base64,AAAA', 'viewId':'front', 'origin':'camera', 'capturedAt':old_time}
+        original = {'id':'registered-front', 'source':'data:image/png;base64,AAAA', 'viewId':'front', 'origin':'file', 'capturedAt':old_time}
         self.items[0].update(inspectionPlan=plan, photos=[original], presentationPhotos=[{'id':'album', 'origin':'album', 'source':'data:image/png;base64,BBBB'}])
         self.paid()
         record = {'plan':plan,'before':{'front':{**original,'listingPhotoId':original['id'],'capturedAt':'FAKE'},
@@ -107,6 +107,7 @@ class LifecycleTests(unittest.TestCase):
                   'after':{},'beforeChecks':['power'],'afterChecks':[],'beforeNote':'기존 흠집 확인'}
         self.call('handoff','lender',inspection=record,reuseListingPhotos=True,confirmedViews=['front','back'])
         self.assertEqual(self.r['inspection']['before']['front']['capturedAt'],old_time)
+        self.assertEqual(self.r['inspection']['before']['front']['origin'],'file')
         self.assertEqual(self.r['inspection']['before']['front']['sourceKind'],'listing')
         self.assertEqual(self.r['inspection']['before']['back']['sourceKind'],'handoff')
         with self.assertRaises(ValueError): self.call('receive')

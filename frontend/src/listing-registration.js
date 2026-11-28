@@ -1,6 +1,6 @@
 import { itemValueFrom, MAX_DAILY_WON, MAX_VALUE_WON, wonInput } from "./listing-pricing.js";
 import { categories, localDay, neighborhoods, rentalDays } from "./model.js?v=rento-home-5-ren";
-import { hasOnlyListingCameraPhotos, missingListingViews } from "./listing-photos.js";
+import { hasValidListingPhotos, missingListingViews } from "./listing-photos.js";
 
 // Validate the entire draft, rather than relying on controls from another step.
 export function validateListingStep(draft, step) {
@@ -13,7 +13,7 @@ export function validateListingStep(draft, step) {
   } else if (step === 1) {
     const missing = missingListingViews(draft);
     if (missing.length) return { message: `사진 촬영 단계가 완료되지 않았어요. ${missing.map((view) => view.label).join(" · ")} 사진을 촬영해 주세요.` };
-    if (!hasOnlyListingCameraPhotos(draft)) return { message: "앱 카메라로 각 부위를 다시 촬영해 주세요." };
+    if (!hasValidListingPhotos(draft)) return { message: "각 부위의 상태 사진을 다시 넣어 주세요." };
     if (draft.photoMode !== "review") return { message: "촬영한 사진을 전체 확인해 주세요." };
   } else if (step === 2) {
     if (wonInput(fields.price, MAX_DAILY_WON) === null) return { field: "price", message: "하루 대여료를 0원부터 1,000만 원까지 1원 단위로 입력해 주세요." };

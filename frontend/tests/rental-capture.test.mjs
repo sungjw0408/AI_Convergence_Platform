@@ -20,6 +20,7 @@ test("multi-view handoff and return retain a blocked comparison; reshooting repl
   window.HTMLCanvasElement.prototype.getContext = () => ({ drawImage() {} });
   let photoCount = 0, comparisons = 0;
   window.HTMLCanvasElement.prototype.toBlob = (callback) => callback(new Blob([`camera-frame-${++photoCount}`], { type: "image/png" }));
+  globalThis.createImageBitmap = async () => ({ width: 640, height: 480, close() {} });
   // Form inputs come from the DOM; binary photo payloads use Node Blob objects.
   globalThis.FormData = class {
     constructor(form) { this.values = form ? [...new window.FormData(form)] : []; }
@@ -31,7 +32,7 @@ test("multi-view handoff and return retain a blocked comparison; reshooting repl
   globalThis.fetch = async (url, options) => {
     assert.equal(url, "/api/photo-comparison");
     assert.match(await options.body.get("before").text(), /^camera-frame-/);
-    assert.match(await options.body.get("after").text(), /^camera-frame-/);
+    assert.match(await options.body.get("after").text(), /^return-file-/);
     comparisons++;
     return new Response(JSON.stringify({ status: comparisons === 1 ? "retake" : "clear", reason: comparisons === 1 ? "alignment" : null, regions: [] }), { status: 200 });
   };
@@ -46,6 +47,14 @@ test("multi-view handoff and return retain a blocked comparison; reshooting repl
   const submit = () => document.querySelector("#dialog form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
   const shoot = async (id) => {
     click(`[data-action="capture-evidence"][data-id="${id}"]`);
+    const picker = document.querySelector("[data-capture-file]");
+    if (picker) {
+      assert.equal(picker.hidden, true);
+      Object.defineProperty(picker, "files", { value: [new Blob([`return-file-${++photoCount}`], { type: "image/png" })] });
+      picker.dispatchEvent(new window.Event("change"));
+      await wait(() => !picker.isConnected);
+      return;
+    }
     click('[data-camera="start"]'); await wait(() => !document.querySelector('[data-camera="shoot"]').hidden);
     click('[data-camera="shoot"]'); await wait(() => !document.querySelector('[data-camera="use"]').hidden);
     click('[data-camera="use"]'); await wait(() => !document.querySelector(".camera-dialog"));
@@ -68,6 +77,7 @@ test("multi-view handoff and return retain a blocked comparison; reshooting repl
     submit(); await wait(() => comparisons === 4 && !document.querySelector('[data-id="reshoot"]').disabled);
     assert.equal(rental().status, "checking");
     assert.equal(rental().inspection.results.left.status, "retake");
+    assert.equal(rental().inspection.after.left.origin, "file");
     const previous = rental().inspection.after;
     click('[data-id="reshoot"]'); await shoot("left"); submit();
     await wait(() => comparisons === 5 && rental().inspection.results.left.status === "clear");

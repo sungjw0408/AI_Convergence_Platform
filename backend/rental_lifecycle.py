@@ -170,7 +170,7 @@ def evidence(rental, data, phase, *, allow_photo_skip=False, listing_item=None, 
     if reused:
         require(listing_item and plan == listing_item.get('inspectionPlan'), '등록된 상태 사진의 촬영 목록을 확인해 주세요.')
         require(set(data.get('confirmedViews', [])) == {v['id'] for v in views}, '모든 부위를 실제 상태와 비교해 확인해 주세요.')
-        registered = {p.get('id'): p for p in listing_item.get('photos', []) if p.get('origin') == 'camera'}
+        registered = {p.get('id'): p for p in listing_item.get('photos', []) if p.get('origin') in ('camera', 'file')}
         for view_id, photo in photos.items():
             require(isinstance(photo, dict), '부위별 사진을 확인해 주세요.')
             if photo.get('listingPhotoId'):
@@ -189,7 +189,7 @@ def evidence(rental, data, phase, *, allow_photo_skip=False, listing_item=None, 
     view_ids = {v['id'] for v in views}
     require(set(photos) <= view_ids if skip else set(photos) == view_ids, '모든 부위를 촬영해 주세요.')
     require(all(isinstance(p, dict) and isinstance(p.get('source'), str) and (re.fullmatch(r'capture:[a-f0-9-]{36}', p['source']) or (reused and p.get('sourceKind') == 'listing' and p.get('listingPhotoId') in registered))
-                for p in photos.values()), '앱에서 촬영한 상태 사진이 필요해요.')
+                for p in photos.values()), '부위별 상태 사진이 필요해요.')
     checks = plan.get('checks', [])
     require(isinstance(checks, list) and all(isinstance(c, dict) and isinstance(c.get('id'), str) for c in checks), '확인 항목을 점검해 주세요.')
     require(set(record.get(phase + 'Checks', [])) == {c['id'] for c in checks}, '구성품과 상태를 확인해 주세요.')

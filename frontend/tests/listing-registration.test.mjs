@@ -22,6 +22,7 @@ test("registration preserves original state photos; handoff reshoots only change
   window.HTMLCanvasElement.prototype.getContext = () => ({ drawImage() {} });
   let counter = 0;
   window.HTMLCanvasElement.prototype.toBlob = (cb) => cb(new Blob([`listing-camera-${++counter}`], { type: "image/png" }));
+  globalThis.createImageBitmap = async () => ({ width: 640, height: 480, close() {} });
   globalThis.FormData = class {
     constructor(form) { this.values = form ? [...new window.FormData(form)] : []; }
     [Symbol.iterator]() { return this.values[Symbol.iterator](); }
@@ -44,6 +45,14 @@ test("registration preserves original state photos; handoff reshoots only change
   localStorage.setItem(key, JSON.stringify({ role: "lender" }));
   const wait = async (predicate) => { for (let i=0;i<200;i++) { if (predicate()) return; await new Promise((r) => setTimeout(r,2)); } assert.fail("UI did not settle"); };
   const click = (selector) => { const el = document.querySelector(selector); assert.ok(el, selector); el.click(); };
+  const selectPhoto = async (selector) => {
+    click(selector);
+    const picker = document.querySelector("[data-capture-file]");
+    assert.ok(picker?.hidden);
+    Object.defineProperty(picker, "files", { value: [new Blob([`listing-file-${++counter}`], { type: "image/png" })] });
+    picker.dispatchEvent(new window.Event("change"));
+    await wait(() => !picker.isConnected);
+  };
   const fill = (name, value) => { const el = document.querySelector(`[name="${name}"]`); el.value = value; el.dispatchEvent(new window.Event("input", { bubbles:true })); el.dispatchEvent(new window.Event("change", { bubbles:true })); };
   const submit = (name = "register") => document.querySelector(`[data-form="${name}"]`).dispatchEvent(new window.Event("submit", { bubbles:true, cancelable:true }));
   try {
@@ -87,24 +96,17 @@ test("registration preserves original state photos; handoff reshoots only change
     click('.registration-actions [data-action="listing-prev"]'); assert.equal(step(), 1);
     assert.equal(document.querySelector('input[type="file"]:not([data-introduction-files])'), null);
     assert.equal(document.querySelector('[data-introduction-files]'),null);
-    click('[data-action="listing-camera"]'); click('[data-camera="start"]');
-    await wait(() => !document.querySelector('[data-camera="shoot"]').hidden);
     for (let i=0; i<4; i++) {
-      const position = i === 0 ? 1 : i, total = i === 0 ? 4 : 3;
-      assert.match(document.querySelector(".camera-face").textContent, new RegExp(`${position} / ${total}`));
-      click('[data-camera="shoot"]');
-      await wait(() => i === 3 ? !document.querySelector(".camera-dialog") : document.querySelector(".camera-face").textContent.startsWith(`${position + 1} / ${total}`));
+      await selectPhoto('[data-action="listing-camera"]');
+      assert.match(document.querySelector(".listing-photo-heading").textContent, new RegExp(`${i + 1} / 4`));
       if (i === 0) {
-        // A partial capture can also move on; publishing still requires the rest.
-        click('[data-camera="close"]');
+        // A partial photo set can move on; publishing still requires the rest.
         submit(); assert.equal(step(), 2);
         assert.equal(photoStep().classList.contains("done"), false);
         submit(); assert.equal(step(), 2);
         assert.match(document.querySelector("#dialog").textContent, /오른쪽 면/);
         click('#dialog [data-action="listing-review-photos"]');
         assert.equal(step(), 1); assert.equal(document.querySelector("#dialog").open, false);
-        click('[data-action="listing-camera"]'); click('[data-camera="start"]');
-        await wait(() => !document.querySelector('[data-camera="shoot"]').hidden);
       }
     }
     assert.equal(step(), 1);
@@ -117,11 +119,9 @@ test("registration preserves original state photos; handoff reshoots only change
     const coverButton = document.querySelectorAll('[data-action="listing-cover"]')[1]; const coverId = coverButton.dataset.id; coverButton.click();
     // Cancelled retakes retain the original; successful retakes replace one view.
     click(`[data-action="listing-photo-retake"][data-id="${coverId}"]`);
-    click('[data-camera="close"]');
+    document.querySelector("[data-capture-file]").dispatchEvent(new window.Event("cancel"));
     assert.equal(document.querySelectorAll(".listing-photo-tile").length, 4);
-    click(`[data-action="listing-photo-retake"][data-id="${coverId}"]`);
-    click('[data-camera="start"]'); await wait(() => !document.querySelector('[data-camera="shoot"]').hidden);
-    click('[data-camera="shoot"]'); await wait(() => !document.querySelector(".camera-dialog"));
+    await selectPhoto(`[data-action="listing-photo-retake"][data-id="${coverId}"]`);
     assert.equal(document.querySelectorAll(".listing-photo-tile").length, 4);
     assert.equal(document.querySelector('[data-action="listing-cover"][aria-pressed="true"]').dataset.id, coverId);
     assert.equal(JSON.parse(localStorage.getItem(key)).listings?.length || 0, 0);
@@ -142,9 +142,9 @@ test("registration preserves original state photos; handoff reshoots only change
     assert.match(item.itemValue.evidence, /https:\/\/example.com\/a/);
     assert.equal(item.pricingContext.modelName, "비교용 모델");
     assert.equal(item.image, item.photos[1].source);
-    assert.equal(await (await photoBlob(item.photos[0].source)).text(), "listing-camera-1");
-    assert.equal(await (await photoBlob(item.photos[1].source)).text(), "listing-camera-5");
-    assert.ok(item.photos.every((p) => p.origin === "camera" && p.capturedAt));
+    assert.equal(await (await photoBlob(item.photos[0].source)).text(), "listing-file-1");
+    assert.equal(await (await photoBlob(item.photos[1].source)).text(), "listing-file-5");
+    assert.ok(item.photos.every((p) => p.origin === "file" && p.capturedAt));
     assert.ok(!localStorage.getItem(key).includes("data:image"));
     location.hash = "#profile"; await wait(() => document.querySelector('[data-action="role"][data-id="renter"]'));
     click('[data-action="role"][data-id="renter"]'); location.hash = `#item/${item.id}`;

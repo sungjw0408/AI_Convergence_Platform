@@ -14,12 +14,12 @@ import { sendRentalCommand, commandForm } from "./rental-lifecycle.js?v=team2-co
 import { connectRentalDatabase, maxDatabaseChanges } from "./rental-database.js";
 import { newAIConversation, sendAIMessage } from "./ai-room.js";
 import { comparePhotos } from "./compare.js";
-import { openCapture } from "./capture.js";
+import { openCapture, pickCaptureFile } from "./capture.js";
 import { preparePhotos, photoUrl, saveOriginal } from "./photo-store.js";
 import { evaluationPage } from "./evaluation.js";
 import { completeDraft, currentResult, inspectionRecord, inspectionSources } from "./inspection.js";
 import { inspectionPhotoDialog } from "./inspection-view.js";
-import { addListingPhotos, assignListingView, hasOnlyListingCameraPhotos, listingCaptureContext, listingSources, maxListingPhotos, missingListingViews, newListingDraft, removeListingPhoto, replaceListingPhoto, syncListingPlan } from "./listing-photos.js";
+import { addListingPhotos, assignListingView, hasValidListingPhotos, listingCaptureContext, listingSources, maxListingPhotos, missingListingViews, newListingDraft, removeListingPhoto, replaceListingPhoto, syncListingPlan } from "./listing-photos.js";
 import { validateListingStep } from "./listing-registration.js";
 import { itemGallery, listingPhotoPanel, listingStatePhotos, introductionPhotoPanel } from "./listing-photo-view.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
@@ -751,21 +751,24 @@ function openListingCamera(form, photoId) {
     refreshListingPhotos(form, draft);
     return;
   }
-  const available = () => role === state.role && form.isConnected && draft.step === 1;
-  openCapture({ title: previous ? "사진 다시 촬영" : "물품 사진 촬영", context: listingCaptureContext(draft), sequence, onCapture(capture, view) {
-    if (!available()) return false;
-    const photo = { blob: capture.blob, preview: URL.createObjectURL(capture.blob), width: capture.width,
-      height: capture.height, capturedAt: capture.capturedAt, addedAt: capture.capturedAt, origin: "camera" };
+  const available = () => role === state.role && form.isConnected && draft.step === 1 && !draft.busy;
+  const [view] = sequence;
+  pickCaptureFile(form, { face: view.label, context: listingCaptureContext(draft), onCapture(capture) {
+    if (!available()) return;
+    const photo = { ...capture, preview: URL.createObjectURL(capture.blob), addedAt: capture.capturedAt };
     try {
       if (previous) replaceListingPhoto(draft, previous.id, photo);
       else { draft.activeViewId = view.id; addListingPhotos(draft, [photo]); }
-      draft.error = "";
     } catch (error) { URL.revokeObjectURL(photo.preview); throw error; }
-    refreshListingPhotos(form, draft);
-  }, onComplete() {
+    draft.error = "";
+    if (missingListingViews(draft).length === 0) {
+      draft.photoMode = "review";
+      showListingStep(1);
+    } else refreshListingPhotos(form, draft);
+  }, onError(message) {
     if (!available()) return;
-    if (missingListingViews(draft).length === 0) draft.photoMode = "review";
-    showListingStep(1);
+    draft.error = message;
+    refreshListingPhotos(form, draft);
   } });
 }
 
@@ -803,17 +806,21 @@ function captureEvidence(form, viewId) {
   const draft = evidenceDraft(kind, rental), view = draft.plan.views.find((v) => v.id === viewId);
   if (!view) return;
   const status = rental.status;
-  const record = inspectionRecord(rental, itemById(rental.itemId));
-  openCapture({ reference: kind.startsWith("handoff") ? draft.photos[view.id]?.source : record.before[view.id]?.source,
-    face: view.label, instruction: view.instruction, returning: !kind.startsWith("handoff"), onCapture(capture) {
+  const returning = !kind.startsWith("handoff");
+  const onCapture = (capture) => {
     if (!form.isConnected || state.role !== role || rental.status !== status || !dialog.open) return;
     const previous = draft.photos[view.id];
     if (previous?.preview) URL.revokeObjectURL(previous.preview);
     capture.preview = URL.createObjectURL(capture.blob);
     draft.photos[view.id] = capture;
     draft.confirmedViews = draft.confirmedViews.filter(id => id !== viewId);
-    showDialog(kind.startsWith("handoff") ? "인도 전 상태 확인" : "반납 사진 촬영", evidenceForm(kind, rental));
-  } });
+    showDialog(returning ? "반납 사진 촬영" : "인도 전 상태 확인", evidenceForm(kind, rental));
+  };
+  if (returning) {
+    pickCaptureFile(form, { face: view.label, onCapture, onError: (message) => formError(form, message) });
+    return;
+  }
+  openCapture({ reference: draft.photos[view.id]?.source, face: view.label, instruction: view.instruction, returning, onCapture });
 }
 
 async function submitEvidence(form, rental, kind, skipPhotos = false) {
@@ -833,7 +840,7 @@ async function submitEvidence(form, rental, kind, skipPhotos = false) {
     const capture = draft.photos[view.id];
     if (!capture || (skipPhotos && draft.reuseListing)) continue;
     photos[view.id] = capture.blob ? { source: await saveOriginal(capture), capturedAt: capture.capturedAt,
-      width: capture.width, height: capture.height, face: view.label } : capture;
+      width: capture.width, height: capture.height, face: view.label, origin: capture.origin } : capture;
   }
   if (!form.isConnected || role !== state.role || status !== rental.status || !dialog.open) return;
   const before = kind.startsWith("handoff");
@@ -1702,14 +1709,14 @@ async function submit(form, submitter) {
         let source = listingSavedSources.get(photo.blob);
         if (!source) {
           const original = await saveOriginal({ blob: photo.blob, capturedAt: photo.capturedAt, width: photo.width,
-            height: photo.height, origin: "camera", addedAt: photo.addedAt,
+            height: photo.height, origin: photo.origin, addedAt: photo.addedAt,
             face: draft.plan.views.find((v) => v.id === photo.viewId)?.label || "추가 사진" });
           // Keep the camera original locally and use a bounded copy for other browsers.
           source = databaseMode ? await readPhoto(photo.blob, false, 45_000) : original;
           listingSavedSources.set(photo.blob, source);
         }
         photos.push({ id: photo.id, source, viewId: photo.viewId,
-          label: draft.plan.views.find((v) => v.id === photo.viewId)?.label || "추가 사진", origin: "camera",
+          label: draft.plan.views.find((v) => v.id === photo.viewId)?.label || "추가 사진", origin: photo.origin,
           capturedAt: photo.capturedAt || null, addedAt: photo.addedAt, width: photo.width, height: photo.height });
       }
       if (role !== state.role || !form.isConnected) return;
@@ -1719,8 +1726,8 @@ async function submit(form, submitter) {
         formError(form, "입력 내용이 변경됐어요. 촬영 부위와 내용을 확인한 뒤 다시 게시해 주세요.");
         return;
       }
-      if (!hasOnlyListingCameraPhotos(draft)) {
-        formError(form, "촬영 원본을 확인할 수 없어요. 앱 카메라로 다시 촬영해 주세요.");
+      if (!hasValidListingPhotos(draft)) {
+        formError(form, "상태 사진을 확인할 수 없어요. 사진을 다시 넣어 주세요.");
         return;
       }
       const selectedIds = introductionIds(draft).filter(id => introductionPool(draft).some(p => p.id === id));

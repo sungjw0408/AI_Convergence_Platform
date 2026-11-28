@@ -1,5 +1,5 @@
 import { inspectionPlan } from "./inspection.js";
-import { isDirectCapture } from "./capture.js";
+import { isRecordedCapture } from "./capture.js";
 
 export const maxListingPhotos = 8;
 const captureContexts = new WeakMap();
@@ -14,11 +14,11 @@ export function newListingDraft(area) {
 }
 
 export const listingCaptureContext = (draft) => captureContexts.get(draft);
-export function hasOnlyListingCameraPhotos(draft) {
+export function hasValidListingPhotos(draft) {
   const context = listingCaptureContext(draft);
   return Boolean(context && draft.photos.length && draft.photos.length <= maxListingPhotos
     && new Set(draft.photos.map((photo) => photo.blob)).size === draft.photos.length
-    && draft.photos.every((photo) => isDirectCapture(photo, context)));
+    && draft.photos.every((photo) => isRecordedCapture(photo, context)));
 }
 
 export function syncListingPlan(draft) {
@@ -45,13 +45,13 @@ export function assignListingView(draft, photoId, viewId) {
 export function addListingPhotos(draft, photos) {
   if (draft.photos.length + photos.length > maxListingPhotos) throw new Error(`사진은 최대 ${maxListingPhotos}장까지 등록할 수 있어요.`);
   const context = listingCaptureContext(draft);
-  if (!context || photos.some((photo) => !isDirectCapture(photo, context))) {
-    throw new Error("이번 등록 과정에서 앱 카메라로 촬영한 원본 사진만 사용할 수 있어요.");
+  if (!context || photos.some((photo) => !isRecordedCapture(photo, context))) {
+    throw new Error("이번 등록 과정에서 추가한 상태 사진만 사용할 수 있어요.");
   }
   const blobs = [...draft.photos, ...photos].map((photo) => photo.blob);
   if (new Set(blobs).size !== blobs.length) throw new Error("같은 사진을 여러 부위에 사용할 수 없어요. 각 부위를 새로 촬영해 주세요.");
   for (let i = 0; i < photos.length; i++) {
-    const photo = { ...photos[i], origin: "camera", id: crypto.randomUUID(), viewId: "" };
+    const photo = { ...photos[i], id: crypto.randomUUID(), viewId: "" };
     draft.photos.push(photo);
     if (i === 0) assignListingView(draft, photo.id, draft.activeViewId);
   }
@@ -70,10 +70,10 @@ export function removeListingPhoto(draft, photoId) {
 export function replaceListingPhoto(draft, photoId, capture) {
   const index = draft.photos.findIndex((photo) => photo.id === photoId);
   if (index < 0) throw new Error("다시 촬영할 사진을 찾을 수 없어요.");
-  if (!isDirectCapture(capture, listingCaptureContext(draft))) throw new Error("앱 카메라로 촬영한 원본만 사용할 수 있어요.");
+  if (!isRecordedCapture(capture, listingCaptureContext(draft))) throw new Error("이번 등록 과정에서 추가한 상태 사진만 사용할 수 있어요.");
   if (draft.photos.some((photo, i) => i !== index && photo.blob === capture.blob)) throw new Error("각 부위를 새로 촬영해 주세요.");
   const previous = draft.photos[index];
-  draft.photos[index] = { ...capture, id: previous.id, viewId: previous.viewId, origin: "camera" };
+  draft.photos[index] = { ...capture, id: previous.id, viewId: previous.viewId };
   if (previous.preview) URL.revokeObjectURL(previous.preview);
 }
 

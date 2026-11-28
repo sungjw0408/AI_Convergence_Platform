@@ -481,7 +481,7 @@ def validate_listing_photos(record):
         )
 
         require(
-            photo.get("origin") == "camera"
+            photo.get("origin") in ("camera", "file")
             and text(photo.get("label"), 100, True)
         )
 

@@ -16,13 +16,16 @@ from listing_pricing import deposit_for_value, load_deposit_policy, valid_pricin
 
 
 class ListingSupportTests(unittest.TestCase):
-    def test_album_introduction_is_separate_from_required_camera_evidence(self):
+    def test_album_introduction_is_separate_from_required_state_photos(self):
         import copy
         plan = {'id':'general','version':1,'views':[{'id':'front','label':'앞면','instruction':'전체가 보이게 촬영','compare':True}], 'checks':[]}
         photo = {'id':'camera-front','origin':'camera','label':'앞면','viewId':'front','source':'data:image/png;base64,AAAA'}
         album = {'id':'album-cover','origin':'album','label':'소개 사진','source':'data:image/png;base64,BBBB'}
         record = {'inspectionPlan':plan,'photos':[photo],'presentationPhotos':[album], 'coverPhotoId':album['id'],'image':album['source']}
         validate_listing_photos(record)
+        file_record = copy.deepcopy(record)
+        file_record['photos'][0]['origin'] = 'file'
+        validate_listing_photos(file_record)
         bad = copy.deepcopy(record);bad['photos'][0]['origin']='album'
         with self.assertRaises(ForbiddenRecord): validate_listing_photos(bad)
         bad = copy.deepcopy(record);bad['presentationPhotos']=[{'id':'missing','photoId':'missing'}]

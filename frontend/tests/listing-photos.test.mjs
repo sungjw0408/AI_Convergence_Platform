@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { openCapture } from "../src/capture.js";
-import { addListingPhotos, assignListingView, hasOnlyListingCameraPhotos, listingCaptureContext, maxListingPhotos, missingListingViews, newListingDraft, removeListingPhoto, syncListingPlan } from "../src/listing-photos.js";
+import { addListingPhotos, assignListingView, hasValidListingPhotos, listingCaptureContext, maxListingPhotos, missingListingViews, newListingDraft, removeListingPhoto, syncListingPlan } from "../src/listing-photos.js";
 import { inspectionRecord } from "../src/inspection.js";
 import { registerPage } from "../src/views.js";
 
@@ -39,7 +39,7 @@ test("fresh captures fill required views and remain available for relabelling", 
   for (let i = 0; i < 3; i++) addListingPhotos(draft, [await capture(draft)]);
   assert.equal(draft.photos.length, 3);
   assert.equal(missingListingViews(draft).length, 0);
-  assert.equal(hasOnlyListingCameraPhotos(draft), true);
+  assert.equal(hasValidListingPhotos(draft), true);
   assignListingView(draft, draft.photos[2].id, "back");
   assert.equal(draft.photos[1].viewId, "");
   assert.equal(draft.photos.length, 3);
@@ -48,10 +48,10 @@ test("fresh captures fill required views and remain available for relabelling", 
 test("album files and forged camera flags are rejected without changing the draft", () => {
   const draft = newListingDraft("죽전동");
   const forged = { blob: new Blob(["edited-album"], { type: "image/png" }), origin: "camera", capturedAt: new Date().toISOString(), width: 640, height: 480 };
-  assert.throws(() => addListingPhotos(draft, [forged]), /앱 카메라로 촬영한 원본/);
+  assert.throws(() => addListingPhotos(draft, [forged]), /이번 등록 과정에서 추가한 상태 사진/);
   assert.equal(draft.photos.length, 0);
   draft.photos.push(forged);
-  assert.equal(hasOnlyListingCameraPhotos(draft), false);
+  assert.equal(hasValidListingPhotos(draft), false);
 });
 
 test("replacing a frame's bytes or using a different registration session is rejected", async () => {
@@ -61,7 +61,7 @@ test("replacing a frame's bytes or using a different registration session is rej
   assert.throws(() => addListingPhotos(draft, [photo, photo]), /같은 사진/);
   addListingPhotos(draft, [photo]);
   draft.photos[0].blob = new Blob(["edited-pixels"], { type: "image/png" });
-  assert.equal(hasOnlyListingCameraPhotos(draft), false);
+  assert.equal(hasValidListingPhotos(draft), false);
 });
 
 test("changing item type preserves captured originals and cover", async () => {
@@ -75,7 +75,7 @@ test("changing item type preserves captured originals and cover", async () => {
   assert.equal(draft.coverId, cover);
   assert.equal(draft.photos[0].viewId, "");
   assert.equal(missingListingViews(draft).length, 4);
-  assert.equal(hasOnlyListingCameraPhotos(draft), true);
+  assert.equal(hasValidListingPhotos(draft), true);
 });
 
 test("photo limit and cover reassignment still work with camera-only photos", async () => {
@@ -87,7 +87,7 @@ test("photo limit and cover reassignment still work with camera-only photos", as
   assert.equal(draft.coverId, draft.photos[0].id);
 });
 
-test("introduction albums are available only in basic information, while inspection stays camera-only", () => {
+test("introduction albums are available only in basic information, while inspection uses the capture action", () => {
   const draft = newListingDraft("죽전동");
   const html = registerPage("lender", "죽전동", draft);
   assert.match(html, /사진 촬영/);
