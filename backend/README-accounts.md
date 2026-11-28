@@ -33,4 +33,4 @@ RENTO_FIREBASE_PROJECT=demo-rento FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
 
 ## Cloud Run에 올릴 때
 
-[팀 서버 배포 안내](README-cloud-run.md)에 따라 팀 접속 암호와 Firebase 웹 API 키를 서버에 연결합니다. 팀원은 공용 주소에서 팀 접속 암호를 입력한 뒤 각자의 렌토 계정으로 가입하거나 로그인합니다.
+[팀 서버 배포 안내](README-cloud-run.md)에 따라 팀 접속 암호와 Firebase 웹 API 키를 서버에 연결합니다. 팀원은 팀 접속 링크를 열고 각자의 렌토 계정으로 가입하거나 로그인합니다.

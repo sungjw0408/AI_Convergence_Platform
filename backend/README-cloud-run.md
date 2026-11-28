@@ -1,6 +1,6 @@
 # 렌토 Cloud Run 팀 서버
 
-Cloud Run에서 웹 화면과 API를 함께 실행합니다. 서버는 전용 서비스 계정으로 서울의 `rento-14a30` Firestore에 연결하고, 렌토 개인 계정과 `rentoSpaces/accounts` 데이터를 사용합니다. 팀원은 HTTPS 주소를 열어 사용자 이름 `rento`와 팀 접속 암호를 입력한 뒤, 앱에서 각자의 계정으로 가입하거나 로그인합니다.
+Cloud Run에서 웹 화면과 API를 함께 실행합니다. 서버는 전용 서비스 계정으로 서울의 `rento-14a30` Firestore에 연결하고, 렌토 개인 계정과 `rentoSpaces/accounts` 데이터를 사용합니다. 팀원은 팀 접속 링크를 열고 앱에서 각자의 계정으로 가입하거나 로그인합니다.
 
 ## 비용
 
@@ -69,6 +69,21 @@ gcloud run deploy rento --source=. --project="$RENTO_PROJECT" --region="$RENTO_R
   --concurrency=4 --timeout=120s
 ```
 
-프로젝트 관리자는 HTTPS 주소와 팀 접속 암호를 팀원에게 전달합니다. 새 브라우저에서 첫 팝업에 팀 접속 정보를 입력하고, 렌토 로그인 화면과 기존 계정의 물품 목록을 확인합니다. 재배포에는 기존 서비스 계정과 비밀을 사용합니다. 비밀을 교체하면 Secret Manager에 새 버전을 추가하고 `--set-secrets`의 버전 번호를 갱신합니다.
+재배포에는 기존 서비스 계정과 비밀을 사용합니다. 비밀을 교체하면 Secret Manager에 새 버전을 추가하고 `--set-secrets`의 버전 번호를 갱신합니다.
+
+## 팀 접속 링크 공유
+
+프로젝트 관리자는 배포한 서버와 같은 팀 접속 암호 버전으로 링크를 만듭니다.
+
+```sh
+RENTO_URL=$(gcloud run services describe rento --project="$RENTO_PROJECT" \
+  --region="$RENTO_REGION" --format='value(status.url)')
+RENTO_ACCESS=$(gcloud secrets versions access 1 --secret=rento-team-password --project="$RENTO_PROJECT" |
+  python3 -c 'import hmac, sys; print(hmac.digest(sys.stdin.buffer.read(), b"rento-team-invite-v1", "sha256").hex())')
+printf '%s/team#access=%s\n' "$RENTO_URL" "$RENTO_ACCESS"
+unset RENTO_ACCESS
+```
+
+출력된 링크는 팀원에게 공유합니다. 새 브라우저에서 링크를 열면 렌토의 로그인·회원가입 화면으로 이동하고, 이 브라우저의 팀 접속은 5일 동안 유지됩니다. 서버의 기본 주소에 접속하면 기존 팀 암호 팝업을 사용할 수 있습니다.
 
 사진 비교 모델은 CPU에서 실행하며 가중치는 이미지 빌드 시 내려받습니다. 거래 채팅은 Firestore에 저장됩니다. Gemini 기능을 쓰려면 별도의 Gemini API 키를 연결해야 합니다.

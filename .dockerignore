@@ -5,6 +5,7 @@
 !backend/*.py
 !frontend/
 !frontend/index.html
+!frontend/team-access.html
 !frontend/styles.css
 !frontend/src/
 !frontend/src/**

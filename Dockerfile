@@ -13,7 +13,7 @@ RUN python -m pip install --index-url https://download.pytorch.org/whl/cpu \
     && python -m pip check
 
 COPY backend/*.py backend/
-COPY frontend/index.html frontend/styles.css frontend/
+COPY frontend/index.html frontend/team-access.html frontend/styles.css frontend/
 COPY frontend/src frontend/src
 COPY frontend/assets frontend/assets
 
