@@ -33,4 +33,4 @@ RENTO_FIREBASE_PROJECT=demo-rento FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
 
 ## Cloud Run에 올릴 때
 
-[Cloud Run 배포 안내](README-cloud-run.md)의 서비스 계정을 사용합니다. Cloud Run 환경 변수로 `RENTO_FIREBASE_WEB_API_KEY`를 설정하면 개인 계정 로그인 화면이 열립니다. 서버 서비스 계정에 기존 Firestore 권한과 Firebase Authentication의 세션 생성·사용자 조회 권한을 부여합니다. Firebase Authentication Admin(`roles/firebaseauth.admin`)은 이 작업을 지원하는 사전 정의 역할입니다. 개인 계정 모드의 팀원은 앱의 이메일·비밀번호로 로그인합니다. [Cloud Run 서비스 ID](https://docs.cloud.google.com/run/docs/securing/service-identity) · [Firebase 인증 IAM](https://docs.cloud.google.com/iam/docs/roles-permissions/firebaseauth)
+[팀 서버 배포 안내](README-cloud-run.md)에 따라 팀 접속 암호와 Firebase 웹 API 키를 서버에 연결합니다. 팀원은 공용 주소에서 팀 접속 암호를 입력한 뒤 각자의 렌토 계정으로 가입하거나 로그인합니다.

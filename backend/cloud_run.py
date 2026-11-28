@@ -36,7 +36,7 @@ if not os.environ.get("RENTO_FIREBASE_PROJECT") or os.environ.get("FIRESTORE_EMU
 
 from compare_server import accounts_enabled, app
 
-if accounts_enabled:
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
-else:
-    configure_team_access(app, os.environ.get("RENTO_TEAM_PASSWORD", ""))
+team_password = os.environ.get("RENTO_TEAM_PASSWORD", "")
+if not accounts_enabled or not team_password:
+    raise RuntimeError("The team server requires Firebase Authentication and a team password.")
+configure_team_access(app, team_password)
