@@ -36,6 +36,9 @@ class RentalDatabaseTests(unittest.TestCase):
             {"collection": "messages", "record": {"id": "m1", "rentalId": "r1", "text": "도착했어요"}},
             {"collection": "notices", "record": {"id": "n1", "rentalId": "r1", "read": False}},
         ]
+        # Historical records can be read/updated, but new bookings use lifecycle commands.
+        from rental_database import stored_fields
+        self.root.collection("rentals").document("r1").set(stored_fields(changes[1]["record"]))
         self.assertEqual(self.post(0, changes).json, {"revision": 1})
         self.assertEqual(self.post(0, [{"collection": "rentals", "record": {"id": "r2"}}]).status_code, 409)
         snapshot = self.api.get(self.url).json

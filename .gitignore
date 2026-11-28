@@ -13,3 +13,6 @@ firebase-data/
 .env
 
 *.bak
+
+backend/.rento-data/
+backend/.venv-team2/

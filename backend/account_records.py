@@ -12,6 +12,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from PIL import Image
 from listing_pricing import deposit_for_value, valid_item_value, valid_pricing_context
 from listing_visibility import LISTING_VISIBILITIES, public_listing
+from rental_lifecycle import calendar_date, held_extension
 
 IDS = re.compile(r"[a-zA-Z0-9_-]{1,128}")
 IMAGE = re.compile(r"data:image/(?:jpeg|png|webp);base64,[a-zA-Z0-9+/]+=*")
@@ -44,7 +45,7 @@ RENTAL_KEYS = {
     "createdAt",
 }
 
-BUSY_STATUSES = ("confirmed", "handover", "active", "checking", "disputed")
+BUSY_STATUSES = ("payment_pending", "confirmed", "handover", "active", "checking", "disputed")
 LISTING_DATE_FIELDS = {"availableFrom", "availableTo"}
 LISTING_EDIT_FIELDS = {"title", "description", "category", "neighborhood", "price"} | LISTING_DATE_FIELDS
 VALUE_SNAPSHOT_KEYS = {"itemValue", "depositPolicy"}
@@ -207,15 +208,19 @@ def account_documents(root, uid, transaction):
             profile_photos[doc.id] = photo
 
     blocked_periods = []
+    now = now_ms()
     for doc in query(root, "rentals", "status", "in", list(BUSY_STATUSES), transaction):
         rental = doc.to_dict()
         if rental["itemId"] not in public_ids and rental["itemId"] not in linked_items:
             continue
+        extension_end = held_extension(rental, now)
         blocked_periods.append({
+            "id": rental["id"],
             "itemId": rental["itemId"],
             "status": rental["status"],
             "start": rental["start"],
-            "end": rental["end"],
+            "end": calendar_date(extension_end, rental["timeZone"]).isoformat() if extension_end else rental["end"],
+            "paymentDueAt": rental.get("paymentDueAt"),
             "after": bool(rental.get("after")),
         })
 
@@ -291,11 +296,18 @@ def validate_listing_schedule(root, transaction, record, current):
     if end < today or (record.get("availableFrom") != current.get("availableFrom") and start < today):
         raise ValueError("새 대여 가능 기간은 오늘 이후 날짜로 설정해 주세요.")
 
+    now = now_ms()
     for snapshot in query(root, "rentals", "itemId", "==", record["id"], transaction):
         rental = snapshot.to_dict()
         if rental["status"] not in ("pending", *BUSY_STATUSES):
             continue
-        reserved_end = day(rental["end"])
+        if rental.get("lifecycleVersion") == 1 and (
+            (rental["status"] == "pending" and rental["requestExpiresAt"] <= now)
+            or (rental["status"] == "payment_pending" and rental["paymentDueAt"] <= now)
+        ):
+            continue
+        extension_end = held_extension(rental, now)
+        reserved_end = calendar_date(extension_end, rental["timeZone"]) if extension_end else day(rental["end"])
         if reserved_end >= today and (start > max(today, day(rental["start"])) or end < reserved_end):
             raise ValueError("대여 가능 기간에 이미 신청되었거나 진행 중인 거래 날짜를 포함해 주세요.")
 

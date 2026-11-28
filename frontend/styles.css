@@ -1745,3 +1745,46 @@ details > label { display: grid; gap: 6px; margin-block: 8px; }
 .profile-image { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 50%; }
 .form-card .profile-photo-remove { display: flex; align-items: center; gap: 8px; }
 .form-card .profile-photo-remove input { width: 18px; height: 18px; min-height: 0; padding: 0; }
+
+/* Team 2: test-payment details remain distinct from photo inspection. */
+.lifecycle-panel { display: grid; gap: 14px; padding: 20px 16px; border: 1px solid #dfe8d6; border-radius: 20px; background: #fbfdf8; }
+.lifecycle-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.lifecycle-heading h2 { font-size: 18px; }
+.lifecycle-heading > span { font-size: 12px; color: #805c44; background: #fff0e3; padding: 4px 8px; border-radius: 8px; }
+.lifecycle-panel dl { margin: 0; display: grid; gap: 10px; }
+.lifecycle-panel dl > div { display: flex; justify-content: space-between; gap: 16px; font-size: 14px; }
+.lifecycle-panel dt { color: #68756d; flex-shrink: 0; }
+.lifecycle-panel dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.lifecycle-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.lifecycle-actions .button { min-height: 42px; font-size: 13px; }
+.lifecycle-panel details { font-size: 13px; }
+.lifecycle-panel details ul { list-style: none; padding: 0; display: grid; gap: 10px; }
+.lifecycle-panel details li { display: flex; justify-content: space-between; gap: 8px; }
+.badge[data-status="payment_pending"] { background: #fff0e3; color: #80502b; }
+.badge[data-status="expired"] { background: #f0f1ed; color: #68756d; }
+
+/* Compact transaction summaries and readable objection cards. */
+.lifecycle-panel { background: #fff; gap: 18px; }
+.lifecycle-panel .notice, .lifecycle-panel .hint { margin: 0; font-size: 12px; line-height: 1.6; }
+.lifecycle-panel .notice small { font-size: 11px; color: #68756d; }
+.objection-details { display: grid; gap: 10px; min-width: 0; }
+.objection-details h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.objection-card { padding: 14px; border: 1px solid #eddec5; border-radius: 12px; background: #fffbf3; min-width: 0; }
+.objection-card header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.objection-card header strong { font-size: 13px; }
+.objection-card p { margin: 10px 0 0; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.objection-card p small { display: block; color: #68756d; font-size: 11px; margin-bottom: 3px; }
+.review-badge { padding: 4px 8px; border-radius: 20px; background: #fff0d6; color: #805723; font-size: 11px; white-space: nowrap; }
+.review-badge.done { background: #eaf4e7; color: #356044; }
+.objection-card.resolved { background: #f8faf7; border-color: #e1e8de; margin-top: 10px; }
+.objection-card .review-result { border-top: 1px solid #e1e8de; padding-top: 10px; }
+.lifecycle-panel details > summary, .review-history > summary { cursor: pointer; padding: 12px 0; font-size: 13px; font-weight: 500; }
+.payment-history { border-top: 1px solid #e7ece4; }
+.payment-history > summary span { color: #68756d; font-size: 11px; margin-left: 5px; }
+.lifecycle-panel .payment-history ul { gap: 0; margin: 0; }
+.lifecycle-panel .payment-history li { padding: 10px 0; border-bottom: 1px solid #f0f3ed; font-size: 13px; align-items: baseline; }
+.payment-history li strong { white-space: nowrap; }
+.payment-history li.failed { color: #7c827c; }
+.payment-history li.failed strong { font-size: 11px; font-weight: 400; }
+.lifecycle-actions { border-top: 1px solid #e7ece4; padding-top: 14px; }
+.lifecycle-actions .button { flex: 1 1 140px; }

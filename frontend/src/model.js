@@ -10,6 +10,8 @@ export const publicListing = (item) => Boolean(item) && (item.visibility === und
 
 export const statuses = {
   pending: "승인 대기",
+  payment_pending: "테스트 결제 대기",
+  expired: "신청·결제 기한 만료",
   confirmed: "예약 확정",
   rejected: "신청 거절",
   canceled: "취소됨",
@@ -70,8 +72,8 @@ export function findAvailability(item, start, end, rentals, ignoredRental, today
       return "이 물품은 주말에 대여할 수 있어요.";
     }
   }
-  const occupies = ["confirmed", "handover", "active", "checking", "disputed"];
-  const hasConflict = rentals.some((rental) => (ignoredRental === undefined || rental.id !== ignoredRental) && rental.itemId === item.id
+  const occupies = ["payment_pending", "confirmed", "handover", "active", "checking", "disputed"];
+  const hasConflict = rentals.some((rental) => !(rental.status === "payment_pending" && rental.paymentDueAt <= Date.now()) && (ignoredRental === undefined || rental.id !== ignoredRental) && rental.itemId === item.id
     && (["handover", "active", "checking"].includes(rental.status) || (rental.status === "disputed" && !rental.after)
       || (occupies.includes(rental.status) && start <= rental.end && rental.start <= end)));
   return hasConflict ? "선택한 기간에 대여할 수 없어요. 다른 날짜를 선택해 주세요." : "";

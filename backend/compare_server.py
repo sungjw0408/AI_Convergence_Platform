@@ -39,6 +39,7 @@ def home():
     if database_enabled:
         mode = "accounts" if accounts_enabled else "firestore"
         metadata.append(f'<meta name="rento-database" content="{mode}">')
+        metadata.append('<meta name="rento-lifecycle" content="enabled">')
     if deposit_policy is not None:
         metadata.append(f'<meta name="rento-deposit-policy" content="{escape(json.dumps(deposit_policy))}">')
     html = (Path(app.static_folder) / "index.html").read_text(encoding="utf-8")

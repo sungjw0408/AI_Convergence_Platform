@@ -120,4 +120,3 @@ def market_prices(query):
 
     with ThreadPoolExecutor(max_workers=4) as workers:
         return [ref for ref in workers.map(read, paths[:4]) if ref]
-

@@ -3,6 +3,7 @@ import { getListingDraft, getPriceRecommendation, pricingContextFrom } from "./l
 import { rankListings, recommendationCandidates } from "./listing-recommendations.js";
 import { depositPreview, listingEditForm, priceRecommendationForm, priceRecommendationResult } from "./listing-registration-view.js";
 import { accountPage, accountRequest, profileEditForm, profileImage, readProfileSettings } from "./accounts.js";
+import { sendRentalCommand, commandForm } from "./rental-lifecycle.js?v=team2-compact-4";
 import { connectRentalDatabase } from "./rental-database.js";
 import { newAIConversation, sendAIMessage } from "./ai-room.js";
 import { comparePhotos } from "./compare.js";
@@ -23,7 +24,7 @@ import {
   aiRoomPage, chatPage, comparePage, conversationPage, inquiryPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalEstimate, rentalsPage, tradePage,
-} from "./views.js?v=rento-home-5-ren";
+} from "./views.js?v=rento-team2-2";
 
 import { canReview, reputation, seat, unread, quota, membershipPanel } from "./community.js";
 import {
@@ -39,6 +40,8 @@ const toast = document.querySelector("#toast");
 const databaseMode = document.querySelector('meta[name="rento-database"]')?.content;
 const accountMode = databaseMode === "accounts";
 const depositPolicy = JSON.parse(document.querySelector('meta[name="rento-deposit-policy"]')?.content ?? "null");
+const lifecycleEnabled = document.querySelector('meta[name="rento-lifecycle"]')?.content === "enabled";
+let lifecycleBusy = false;
 const preferencesKey = "rento-firestore-preferences-v1";
 const state = accountMode ? initialState() : readState(databaseMode ? preferencesKey : undefined);
 let account = null;
@@ -296,13 +299,13 @@ function render() {
   else if (page === "assistant") content = aiRoomPage(assistantSession(), visibleListing);
   else if (page === "item") {
     const item = visibleListing(id);
-    if (item) content = itemPage(item, role, filters.date, gallerySelections.get(id), depositPolicy, accountMode);
+    if (item) content = itemPage(item, role, filters.date, gallerySelections.get(id), depositPolicy, accountMode, lifecycleEnabled);
   }
   else if (page === "new") content = registerPage(role, state.area, listingDraft(), depositPolicy);
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
   else if (page === "trade") {
     const rental = rentalById(id);
-    if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id), inspectionViews.get(id));
+    if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id), inspectionViews.get(id), lifecycleEnabled);
   } else if (page === "chat" && !id) {
     content = chatPage(
       state.rentals,
@@ -542,12 +545,42 @@ function formError(form, message) {
 
 const formErrorMarkup = '<p class="form-error" role="alert" hidden></p>';
 
+async function runLifecycle(action, data) {
+  if (!lifecycleEnabled) throw new Error("거래 서버를 실행해 주세요: python backend/lifecycle_server.py --port 8003");
+  if (lifecycleBusy) throw new Error("거래를 처리 중이에요. 잠시 후 다시 시도해 주세요.");
+  lifecycleBusy = true;
+  try {
+    await persistDatabase.waitForSaves();
+    const rental = await sendRentalCommand(action, data, state.role, accountMode);
+    await persistDatabase.refresh(true);
+    if (dialog.open) dialog.close();
+    render();
+    if (action.startsWith("pay") && data.outcome === "failure") {
+      showDialog("테스트 결제 실패", '<p class="notice" role="alert">테스트 결제에 실패했어요. 실제 청구는 없으며, 결제 기한 안에 다시 시도해 주세요.</p><button class="button primary" data-action="close">확인</button>');
+    } else if (action === "amount_objection" || action === "return_objection") {
+      showToast("이의가 접수됐어요. 거래·결제 내역에서 내용과 처리 상태를 확인해 주세요.");
+    }
+    return rental;
+  } catch (error) {
+    try { await persistDatabase.refresh(true); } catch {}
+    throw error;
+  } finally { lifecycleBusy = false; }
+}
+
 async function tradeAction(action) {
   const rental = rentalById(route()[1]);
   if (!rental) return;
   const owns = state.role === rental.lenderId;
   const borrows = state.role === rental.renterId;
+  if (lifecycleEnabled && rental.lifecycleVersion !== 1 && action !== "review") {
+    showToast("기존 시연 거래는 조회만 가능해요. 날짜·시각을 지정해 새로 신청해 주세요."); return;
+  }
   const tradeItem = itemById(rental.itemId);
+  if (rental.lifecycleVersion === 1 && ["confirm", "reject", "receive", "complete"].includes(action)) {
+    try { await runLifecycle(({confirm: "approve", reject: "reject", receive: "receive", complete: "complete"})[action], {rentalId: rental.id}); }
+    catch (error) { showToast(error.message); }
+    return;
+  }
   if (action === "confirm" && owns && rental.status === "pending") {
     if (accountMode && (!rental.itemValue || !rental.depositPolicy)) {
       showDialog("이 신청은 승인할 수 없어요", '<p class="notice">가액과 보증금 기준이 저장되지 않았어요. 물품 상세에서 가액을 등록하고 보증금 정책이 적용된 뒤 다시 신청해 주세요.</p>');
@@ -562,7 +595,7 @@ async function tradeAction(action) {
   } else if (action === "reject" && owns && rental.status === "pending") {
     await updateTrade(rental, "rejected", rental.renterId, "대여 신청이 거절됐어요.");
   } else if (action === "cancel" && ((borrows && rental.status === "pending")
-      || ((owns || borrows) && rental.status === "confirmed"))) {
+      || ((owns || borrows) && ["payment_pending", "confirmed", "handover"].includes(rental.status)))) {
     showDialog("예약 취소", `<form data-form="cancel" data-id="${rental.id}" class="form-card plain">
       <p>이 대여 신청을 취소하시겠어요?</p><button class="button primary" type="submit">취소 확정</button>
     </form>`);
@@ -764,24 +797,33 @@ async function submitEvidence(form, rental, kind) {
       width: capture.width, height: capture.height, face: view.label } : capture;
   }
   if (!form.isConnected || role !== state.role || status !== rental.status || !dialog.open) return;
-  if (kind === "handoff") {
-    rental.inspection = { plan: draft.plan, before: photos, after: {}, beforeChecks: draft.checks, afterChecks: [], beforeNote: draft.note, results: {} };
-    rental.before = photos[draft.plan.views[0].id].source;
-    delete rental.sample;
+  const before = kind === "handoff";
+  const current = before ? null : inspectionRecord(rental, itemById(rental.itemId));
+  const inspection = before
+    ? { plan: draft.plan, before: photos, after: {}, beforeChecks: draft.checks, afterChecks: [], beforeNote: draft.note, results: {} }
+    : { ...current, after: photos, afterChecks: draft.checks, afterNote: draft.note,
+        returnHistory: [...(current.returnHistory || []), { photos: current.after, replacedAt: new Date().toISOString() }]
+          .filter((entry) => Object.keys(entry.photos).length) };
+  if (rental.lifecycleVersion === 1) {
+    const command = before ? "handoff" : kind === "return-update" ? "reshoot" : "return";
+    await runLifecycle(command, { rentalId: rental.id, inspection });
   } else {
-    const previous = inspectionRecord(rental, itemById(rental.itemId));
-    rental.inspection = { ...previous, after: photos, afterChecks: draft.checks, afterNote: draft.note,
-      returnHistory: [...(previous.returnHistory || []), { photos: previous.after, replacedAt: new Date().toISOString() }].filter((entry) => Object.keys(entry.photos).length) };
-    rental.after = photos[draft.plan.views[0].id].source;
-    delete rental.photoAnalysis;
+    rental.inspection = inspection;
+    if (before) {
+      rental.before = photos[draft.plan.views[0].id].source;
+      delete rental.sample;
+    } else {
+      rental.after = photos[draft.plan.views[0].id].source;
+      delete rental.photoAnalysis;
+    }
+    const recipient = before ? rental.renterId : rental.lenderId;
+    const message = before ? "대여 전 상태 사진이 등록됐어요. 물품을 받으면 수령을 확인해 주세요."
+      : kind === "return-update" ? "반납 상태 사진이 업데이트됐어요." : "반납 요청과 상태 사진이 도착했어요.";
+    if (!await updateTrade(rental, before ? "handover" : "checking", recipient, message)) return;
   }
-  const recipient = kind === "handoff" ? rental.renterId : rental.lenderId;
-  const message = kind === "handoff" ? "대여 전 상태 사진이 등록됐어요. 물품을 받으면 수령을 확인해 주세요."
-    : kind === "return-update" ? "반납 상태 사진이 업데이트됐어요." : "반납 요청과 상태 사진이 도착했어요.";
-  if (!await updateTrade(rental, kind === "handoff" ? "handover" : "checking", recipient, message)) return;
   for (const capture of Object.values(draft.photos)) if (capture.preview) URL.revokeObjectURL(capture.preview);
   evidenceDrafts.delete(`${rental.id}:${kind}`);
-  if (kind !== "handoff") await analyzeTrade(rental);
+  if (!before) await analyzeTrade(rentalById(rental.id));
 }
 
 async function runEvaluation() {
@@ -981,7 +1023,10 @@ document.addEventListener("click", async (event) => {
     const link = document.createElement("a"); link.href = url; link.download = "photo-evaluation.json"; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000); return;
   }
-  if (action === "close") dialog.close();
+  if (action === "lifecycle") {
+    const rental = rentalById(route()[1]);
+    if (rental?.lifecycleVersion === 1) showDialog("거래 처리", commandForm(id, rental, escape, value => new Intl.NumberFormat("ko-KR").format(value) + "원"));
+  } else if (action === "close") dialog.close();
   else if (action === "category" && categories.includes(id)) {
     filters.category = id;
     screen.querySelectorAll(".chip").forEach((chip) => chip.setAttribute("aria-pressed", String(chip === target)));
@@ -1108,7 +1153,7 @@ document.addEventListener("input", (event) => {
     if (start && end && end < start) form.elements.end.value = start;
     if (form.dataset.form === "request") {
       const item = itemById(form.dataset.id);
-      form.querySelector("#estimate").textContent = rentalEstimate(item, start, form.elements.end.value, depositPolicy);
+      form.querySelector("#estimate").textContent = rentalEstimate(item, start, form.elements.end.value, depositPolicy, lifecycleEnabled);
       formError(form, "");
     }
   }
@@ -1326,8 +1371,11 @@ async function submit(form) {
         formError(form, "대여 가능 기간의 시작일과 종료일을 확인해 주세요.");
         return;
       }
-      const outside = state.rentals.some((rental) => rental.itemId === id && rental.end >= today
-        && ["pending", "confirmed", "handover", "active", "checking", "disputed"].includes(rental.status)
+      const now = Date.now();
+      const outside = blockedRentals().some((rental) => rental.itemId === id && rental.end >= today
+        && ["pending", "payment_pending", "confirmed", "handover", "active", "checking", "disputed"].includes(rental.status)
+        && !(rental.status === "payment_pending" && rental.paymentDueAt <= now)
+        && !(rental.status === "pending" && rental.requestExpiresAt <= now)
         && (start > (rental.start < today ? today : rental.start) || end < rental.end));
       if (outside) {
         formError(form, "대여 가능 기간에 이미 신청되었거나 진행 중인 거래 날짜를 포함해 주세요.");
@@ -1369,20 +1417,32 @@ async function submit(form) {
     if (!item || !publicListing(item) || item.owner === state.role || state.role === "admin") return;
     const blocked = depositBlock(item, depositPolicy, accountMode);
     if (blocked) { formError(form, blocked); return; }
-    const money = rentalDepositSnapshot(item, depositPolicy);
-    const error = findAvailability(item, date.start, date.end, blockedRentals());
-    const same = state.rentals.some((rental) => rental.status === "pending" && rental.itemId === id
-      && rental.renterId === state.role && rental.start <= date.end && date.start <= rental.end);
-    if (error || same) {
-      formError(form, error || "승인 대기 중인 내 신청과 날짜가 겹쳐요. 거래 내역에서 기존 신청을 철회한 뒤 다시 신청해 주세요.");
-      return;
+    let rental;
+    if (lifecycleEnabled) {
+      const startAt = new Date(date.start), endAt = new Date(date.end);
+      if (!Number.isFinite(startAt.getTime()) || !Number.isFinite(endAt.getTime()) || endAt <= startAt) {
+        formError(form, "시작·반납 날짜와 시각을 확인해 주세요.");
+        return;
+      }
+      rental = await runLifecycle("request", {
+        itemId: id, startAt: startAt.toISOString(), endAt: endAt.toISOString(), timeZone: fields.get("timeZone"),
+      });
+    } else {
+      const money = rentalDepositSnapshot(item, depositPolicy);
+      const error = findAvailability(item, date.start, date.end, blockedRentals());
+      const same = state.rentals.some((rental) => rental.status === "pending" && rental.itemId === id
+        && rental.renterId === state.role && rental.start <= date.end && date.start <= rental.end);
+      if (error || same) {
+        formError(form, error || "승인 대기 중인 내 신청과 날짜가 겹쳐요. 거래 내역에서 기존 신청을 철회한 뒤 다시 신청해 주세요.");
+        return;
+      }
+      rental = { id: newId(), createdAt: Date.now(), itemId: id, renterId: state.role, lenderId: item.owner,
+        ...date, ...money, total: item.price * rentalDays(date.start, date.end), status: "pending" };
+      state.rentals.unshift(rental);
+      announce(item.owner, rental, "새 대여 신청이 도착했어요.");
+      const saving = save();
+      if (saving && !await saving) return;
     }
-    const rental = { id: newId(), createdAt: Date.now(), itemId: id, renterId: state.role, lenderId: item.owner,
-      ...date, ...money, total: item.price * rentalDays(date.start, date.end), status: "pending" };
-    state.rentals.unshift(rental);
-    announce(item.owner, rental, "새 대여 신청이 도착했어요.");
-    const saving = save();
-    if (saving && !await saving) return;
     direction = "in";
     navigate(`#trade/${rental.id}`);
     return;
@@ -1509,6 +1569,17 @@ async function submit(form) {
   if (!rental) return;
   const owns = state.role === rental.lenderId;
   const borrows = state.role === rental.renterId;
+  if (kind === "lifecycle" && rental.lifecycleVersion === 1) {
+    const data = Object.fromEntries(fields);
+    data.rentalId = id;
+    for (const key of ["endAt", "appointmentAt", "returnedAt"]) if (data[key]) data[key] = new Date(data[key]).toISOString();
+    for (const key of ["amount", "repairCost"]) if (key in data) data[key] = Number(data[key]);
+    for (const key of ["consent", "noTimeChangeAgreed"]) if (key in data) data[key] = data[key] === "on";
+    await runLifecycle(form.dataset.command, data);
+    return;
+  }
+  if (rental.lifecycleVersion === 1 && kind === "cancel") { await runLifecycle("cancel", {rentalId: id}); return; }
+  if (rental.lifecycleVersion === 1 && kind === "dispute") { await runLifecycle("dispute", {rentalId: id, note: fields.get("note")}); return; }
   if (kind === "message" && (owns || borrows) && chatAllowed(rental)) {
     const message = fields.get("message").trim();
     if (!message || message.length > 350) return;
@@ -1518,7 +1589,7 @@ async function submit(form) {
     render();
     document.querySelector(".compose input")?.focus();
   } else if (kind === "cancel" && ((borrows && rental.status === "pending")
-      || ((owns || borrows) && rental.status === "confirmed"))) {
+      || ((owns || borrows) && ["payment_pending", "confirmed", "handover"].includes(rental.status)))) {
     await updateTrade(rental, "canceled", owns ? rental.renterId : rental.lenderId, "대여 신청이 취소됐어요.");
   } else if (["handoff", "return", "return-update"].includes(kind) && canSubmitEvidence(kind, rental)) {
     await submitEvidence(form, rental, kind);
@@ -1585,7 +1656,7 @@ render();
 if (persistDatabase) {
   let refreshing = false;
   setInterval(async () => {
-    if (refreshing || databaseFailed || document.hidden || dialog.open) return;
+    if (refreshing || lifecycleBusy || databaseFailed || document.hidden || dialog.open) return;
     refreshing = true;
     try {
       const previousIds = new Set(Object.values(state.messages).flat().map(m => m.id));
@@ -1593,7 +1664,7 @@ if (persistDatabase) {
       const arrived = Object.values(state.messages).flat().some(m => !previousIds.has(m.id) && m.sender !== state.role && !m.read);
       if (arrived) showToast("새 채팅 메시지가 도착했어요.");
       const [page, id] = route();
-      if ((["chat", "profile", "person", "membership", "trade", "my-listings", "saved"].includes(page)
+      if ((["chat", "profile", "person", "membership", "rentals", "trade", "my-listings", "saved"].includes(page)
           || (page === "item" && !visibleListing(id))) && !dialog.open) {
         const input = screen.querySelector('[name="message"]');
         const draft = input?.value, focused = input && document.activeElement === input;
