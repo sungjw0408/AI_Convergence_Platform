@@ -397,3 +397,20 @@ def lifecycle_notices(before, after, now):
             notices.append({'id': 'n-' + key, 'rentalId': record['id'], 'role': actor, 'createdAt': now,
                             'message': labels.get(record['status'], '거래 상태 변경'), 'read': False})
     return notices
+
+
+def validate_feedback_update(current, record, actor, now):
+    """Validate one party's new review without changing the other party's review."""
+    from community_records import can_submit
+    side = 'renter' if actor == current['renterId'] else 'lender' if actor == current['lenderId'] else None
+    require(side and can_submit(current, side, now), '후기 작성 권한과 기한을 확인해 주세요.')
+    entries = record.get('feedback')
+    require(isinstance(entries, dict) and set(entries) <= {'renter', 'lender'}, '후기 내용을 확인해 주세요.')
+    entry = entries.get(side)
+    require(isinstance(entry, dict) and set(entry) == {'rating', 'text'}, '후기 내용을 확인해 주세요.')
+    require(type(entry['rating']) is int and 1 <= entry['rating'] <= 5, '별점을 확인해 주세요.')
+    text(entry['text'], '후기', 500)
+    for other, value in entries.items():
+        if other != side:
+            require(value == current.get('feedback', {}).get(other), '상대방 후기는 변경할 수 없어요.')
+    record['feedback'] = {**current.get('feedback', {}), side: entry}

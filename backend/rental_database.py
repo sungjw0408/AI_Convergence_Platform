@@ -6,7 +6,14 @@ from urllib.parse import urlsplit
 
 from flask import abort, g, jsonify, request
 
-COLLECTIONS = ("listings", "rentals", "messages", "notices")
+COLLECTIONS = (
+    "listings",
+    "rentals",
+    "messages",
+    "notices",
+    "memberships",
+    "inquiries",
+)
 DOCUMENT_ID = re.compile(r"[a-zA-Z0-9_-]{1,100}")
 # Firestore does not allow arrays inside arrays (e.g. LPIPS bounding boxes).
 STRUCTURED_FIELDS = ("inspection", "photoAnalysis")
@@ -73,8 +80,10 @@ def register_database(app, client=None, space=None, account_mode=False):
         ForbiddenRecord = PermissionError
 
     @firestore.transactional
-    def read(transaction, uid):
+    def read(transaction, uid, since):
         meta = root.get(transaction=transaction).to_dict() or {}
+        if since == meta.get("revision", 0):
+            return {"revision": since}
         records = {}
         if uid:
             records = account_documents(root, uid, transaction)
@@ -102,12 +111,20 @@ def register_database(app, client=None, space=None, account_mode=False):
             if record.get("lifecycleVersion") == 1 or (current and current.get("lifecycleVersion") == 1):
                 if not current or record.get("lifecycleVersion") != 1:
                     raise ValueError("새 거래는 거래 명령으로 생성해 주세요.")
-                allowed = {"inspection", "photoAnalysis", "review"}
+                allowed = {"inspection", "photoAnalysis", "review", "feedback"}
                 if any(record.get(k) != current.get(k) for k in record.keys() | current.keys() if k not in allowed):
                     raise ValueError("거래 상태와 금액은 거래 명령으로만 변경할 수 있어요.")
                 old, new = current.get("inspection", {}), record.get("inspection", {})
                 if {k: v for k, v in old.items() if k != "results"} != {k: v for k, v in new.items() if k != "results"}:
                     raise ValueError("촬영 기록은 촬영 완료 명령으로 저장해 주세요.")
+        if not uid:
+            from rental_lifecycle import validate_feedback_update
+            for name, record in updates:
+                if name == "rentals":
+                    current = app_fields(root.collection(name).document(record["id"]).get(transaction=transaction).to_dict())
+                    if record.get("feedback") != current.get("feedback"):
+                        actor = request.headers.get("X-Rento-Demo-Actor")
+                        validate_feedback_update(current, record, actor, int(time.time() * 1000))
         if uid:
             updates = authorize_updates(root, transaction, uid, updates)
         for name, record in updates:
@@ -211,7 +228,7 @@ def register_database(app, client=None, space=None, account_mode=False):
         try:
             if request.method == "GET":
                 lifecycle(client.transaction())
-                response = jsonify(read(client.transaction(read_only=True), uid))
+                response = jsonify(read(client.transaction(read_only=True), uid, request.args.get("since", type=int)))
             else:
                 if not request.is_json:
                     abort(415)

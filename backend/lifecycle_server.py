@@ -86,7 +86,7 @@ class Store:
                     # Transactions and money may only be changed via the command endpoint.
                     if not current or current.get('lifecycleVersion') != 1 or record.get('lifecycleVersion') != 1:
                         raise ValueError('거래는 거래 명령으로 생성해 주세요.')
-                    allowed = {'inspection', 'photoAnalysis', 'review'}
+                    allowed = {'inspection', 'photoAnalysis', 'review', 'feedback'}
                     if actor not in (current['renterId'], current['lenderId']):
                         raise ValueError('거래 당사자만 저장할 수 있어요.')
                     if any(record.get(k) != current.get(k) for k in record.keys() | current.keys() if k not in allowed):
@@ -95,6 +95,9 @@ class Store:
                     old, new = current.get('inspection', {}), record.get('inspection', {})
                     if {k: v for k, v in old.items() if k != 'results'} != {k: v for k, v in new.items() if k != 'results'}:
                         raise ValueError('촬영 기록은 촬영 완료 명령으로 저장해 주세요.')
+                    if record.get('feedback') != current.get('feedback'):
+                        from rental_lifecycle import validate_feedback_update
+                        validate_feedback_update(current, record, actor, self.clock())
                     if record.get('review') != current.get('review') and (current['status'] != 'complete' or actor != current['renterId'] or current.get('review')):
                         raise ValueError('후기를 저장할 수 없어요.')
                 elif name == 'listings':

@@ -1,4 +1,4 @@
-import { sendRentalCommand, commandForm } from "./rental-lifecycle.js?v=team2-compact-4";
+import { sendRentalCommand, commandForm } from "./rental-lifecycle.js?v=team2-develop-5";
 import { accountPage, accountRequest } from "./accounts.js";
 import { connectRentalDatabase } from "./rental-database.js";
 import { newAIConversation, sendAIMessage } from "./ai-room.js";
@@ -17,11 +17,18 @@ import {
   rentalDays, suggestedFields, writeState,
 } from "./model.js?v=rento-home-5-ren";
 import {
-  aiRoomPage, chatPage, comparePage, conversationPage, dateInputs, escape, home, itemPage, listingRows,
+  aiRoomPage, chatPage, comparePage, conversationPage, inquiryPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalEstimate, rentalsPage, tradePage,
-} from "./views.js?v=rento-team2-2";
+} from "./views.js?v=rento-team2-develop-5";
 
+import { canReview, reputation, seat, unread, quota, membershipPanel } from "./community.js";
+import {
+  findInquiry,
+  createInquiry,
+  inquiryPartner,
+  isInquiryParty
+} from "./inquiry.js";
 const screen = document.querySelector("#screen");
 const navigation = document.querySelector("#navigation");
 const dialog = document.querySelector("#dialog");
@@ -115,6 +122,56 @@ async function analyzeTrade(rental, force = false) {
 const allItems = () => accountMode ? state.listings : [...catalog, ...state.listings];
 const itemById = (id) => allItems().find((item) => item.id === id);
 const rentalById = (id) => state.rentals.find((rental) => rental.id === id);
+
+state.inquiries ??= [];
+
+const inquiryById = (id) =>
+  state.inquiries.find(room => room.id === id);
+
+function totalChatUnread(role = state.role) {
+  const rentalCount = state.rentals
+    .filter(r => isParty(r) && chatAllowed(r))
+    .reduce((n, r) => n + unread(state.messages[r.id], role), 0);
+
+  const inquiryCount = state.inquiries
+    .filter(room => isInquiryParty(room, role))
+    .reduce((n, room) => n + unread(state.messages[room.id], role), 0);
+
+  return rentalCount + inquiryCount;
+}
+
+let openingInquiry = false;
+
+async function startInquiry(partnerId) {
+  const role = state.role;
+
+  if (openingInquiry || !partnerId ||
+      partnerId === role || role === "admin") return;
+
+  openingInquiry = true;
+
+  try {
+    let room = findInquiry(state.inquiries, role, partnerId);
+
+    if (!room) {
+      if (!allItems().some(item => item.owner === partnerId)) {
+        showToast("등록된 물품이 없는 상대예요.");
+        return;
+      }
+
+      room = createInquiry(state.inquiries, role, partnerId);
+
+      const saving = save();
+      if (saving && !await saving) return;
+    }
+
+    if (state.role === role) {
+      navigate(`#chat/${room.id}`);
+    }
+  } finally {
+    openingInquiry = false;
+  }
+}
 const isParty = (rental) => rental && [rental.lenderId, rental.renterId].includes(state.role);
 const favoriteKey = (id) => accountMode ? id : state.role + "/" + id;
 const isFavorite = (id) => state.favorites.includes(favoriteKey(id));
@@ -161,14 +218,14 @@ function availabilityLabel(item, filtered) {
   return "예약 중";
 }
 
-function filteredListings() {
-  const search = filters.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+function filteredListings(criteria = filters) {
+  const search = criteria.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   let items = allItems().filter((item) => {
     const text = [item.title, item.category, item.neighborhood, item.description].join(" ").toLowerCase();
-    return (filters.category === "전체" || item.category === filters.category)
+    return (criteria.category === "전체" || item.category === criteria.category)
       && search.every((term) => text.includes(term))
-      && (filters.maxPrice === null || item.price <= filters.maxPrice)
-      && (!filters.date.start || !findAvailability(item, filters.date.start, filters.date.end, state.rentals));
+      && (criteria.maxPrice === null || item.price <= criteria.maxPrice)
+      && (!criteria.date.start || !findAvailability(item, criteria.date.start, criteria.date.end, state.rentals));
   });
   if (state.area !== "죽전동") {
     items = items.sort((a, b) => Number(b.neighborhood === state.area) - Number(a.neighborhood === state.area));
@@ -194,31 +251,156 @@ function render() {
     area: state.area, ...filters, rows: rowsFor(filteredListings(), true),
     unread: state.notices.some((notice) => notice.role === role && !notice.read),
   });
-  else if (page === "assistant") content = aiRoomPage(assistantSession(), itemById);
+  else if (page === "assistant") content = aiRoomPage(assistantSession(), itemById, assistantSession().criteria ?? filters);
   else if (page === "item" && itemById(id)) content = itemPage(itemById(id), role, filters.date, gallerySelections.get(id));
   else if (page === "new") content = registerPage(role, state.area, listingDraft());
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
   else if (page === "trade") {
     const rental = rentalById(id);
     if (rental && (isParty(rental) || role === "admin")) content = tradePage(rental, itemById(rental.itemId), role, comparisonFeedback.get(id), inspectionViews.get(id), lifecycleEnabled);
-  } else if (page === "chat" && !id) content = chatPage(state.rentals, itemById, role, state.messages, chatAllowed);
-  else if (page === "chat") {
+  } else if (page === "chat" && !id) {
+    content = chatPage(
+      state.rentals,
+      itemById,
+      role,
+      state.messages,
+      chatAllowed,
+      state.inquiries
+    );
+  } else if (page === "chat") {
+    const room = inquiryById(id);
     const rental = rentalById(id);
-    if (isParty(rental) && chatAllowed(rental)) content = conversationPage(rental, itemById(rental.itemId), state.messages[id] ?? [], role);
+
+    if (room && isInquiryParty(room, role)) {
+      content = inquiryPage(
+        room,
+        state.messages[id] ?? [],
+        role
+      );
+    } else if (isParty(rental) && chatAllowed(rental)) {
+      content = conversationPage(
+        rental,
+        itemById(rental.itemId),
+        state.messages[id] ?? [],
+        role
+      );
+    }
   } else if (page === "profile") content = profilePage(role, allItems().filter((item) => isFavorite(item.id)).length,
     allItems().filter((item) => item.owner === role).length, account);
   else if (!accountMode && page === "dev" && id === "compare") content = comparePage(demo);
   else if (!accountMode && page === "dev" && id === "photo-evaluation") content = evaluationPage(evaluation, pageHeader, escape);
-  else if (page === "membership") content = membershipPage();
+  else if (page === "membership") content = membershipPage() + membershipPanel(role, state.memberships[role], allItems(), state.rentals, billingMonth(), escape, !accountMode);
   else if (page === "saved" || page === "my-listings") {
     const items = allItems().filter((item) => page === "saved" ? isFavorite(item.id) : item.owner === role);
     const title = page === "saved" ? "관심 물품" : "내가 올린 물품";
     content = pageHeader(title, "#profile") + `<div class="content">${items.length ? rowsFor(items)
       : `<p class="notice">${page === "saved" ? "아직 관심 물품이 없어요." : "아직 올린 물품이 없어요."}</p>`}</div>`;
   }
+   if ((page === "profile" || page === "person") &&
+      (page === "profile" || id)) {
+
+    const uid = page === "profile" ? role : id;
+
+    const stats = state.publicReputation?.[uid]
+      ?? reputation(state.rentals, uid);
+
+    const mean = stats.reviews.length
+      ? (stats.reviews.reduce((n, r) => n + r.rating, 0)
+        / stats.reviews.length).toFixed(1)
+      : "평가 전";
+
+    const name = people[uid]?.name ?? "이웃";
+
+    const ownerItems = allItems().filter(
+      item => item.owner === uid
+    );
+
+    const reputationHTML = `
+      <div class="person-stats">
+        <div>
+          <strong>${mean}</strong>
+          <span>평균 별점</span>
+        </div>
+        <div>
+          <strong>${stats.reviews.length}</strong>
+          <span>거래 후기</span>
+        </div>
+        <div>
+          <strong>${stats.completed}</strong>
+          <span>완료 거래</span>
+        </div>
+      </div>`;
+
+    const reviewsHTML = `
+      <section class="person-section">
+        <h2>거래 후기</h2>
+
+        ${stats.reviews.length
+          ? stats.reviews.map(r => `
+            <div class="person-review">
+              <strong class="review-stars">
+                ${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)}
+              </strong>
+              <p>${escape(r.text)}</p>
+            </div>
+          `).join("")
+          : `<p class="person-empty">
+               아직 등록된 거래 후기가 없어요.
+             </p>`}
+      </section>`;
+
+    if (page === "profile") {
+      content += `
+        <section class="content stack">
+          <h2>거래 평판</h2>
+          ${reputationHTML}
+          ${reviewsHTML}
+        </section>`;
+    } else {
+      content = pageHeader("상대방 프로필", "#home") + `
+        <div class="content stack person-page">
+
+          <section class="person-card">
+
+            <div class="person-avatar">
+              ${icon("user")}
+            </div>
+
+            <h2>${escape(name)}</h2>
+
+            ${reputationHTML}
+
+            ${uid !== role && role !== "admin" ? `
+              <button
+                class="button primary person-chat-button"
+                data-action="start-inquiry"
+                data-id="${escape(uid)}">
+                ${icon("chat")}
+                채팅하기
+              </button>
+            ` : ""}
+
+          </section>
+
+          <section class="person-section">
+            <h2>등록한 물품 (${ownerItems.length})</h2>
+
+            ${ownerItems.length
+              ? rowsFor(ownerItems)
+              : `<p class="person-empty">
+                   등록한 물품이 없어요.
+                 </p>`}
+          </section>
+
+          ${reviewsHTML}
+
+        </div>`;
+    }
+  }
   screen.innerHTML = content ?? missingPage();
   const history = screen.querySelector(".chat-history");
   if (history) history.scrollTop = history.scrollHeight;
+  observeMessages();
   const aiHistory = screen.querySelector(".ai-room-history");
   if (aiHistory) aiHistory.scrollTop = aiHistory.scrollHeight;
 
@@ -227,8 +409,60 @@ function render() {
     ["home", "home", "홈"], ["rentals", "calendar", role === "admin" ? "분쟁 검토" : "내 대여"],
     ["chat", "chat", "채팅"], ["profile", "user", "내 정보"],
   ];
+  const totalUnread = totalChatUnread(role);
   navigation.innerHTML = tabs.map(([target, symbol, label]) =>
-    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}>${icon(symbol)}<span>${label}</span></a>`).join("");
+    `<a href="#${target}"${target === parent ? ' aria-current="page"' : ""}><span class="nav-icon">${icon(symbol)}${target === "chat" ? `<b class="nav-unread" aria-label="안 읽은 메시지 ${totalUnread}개" ${totalUnread ? "" : "hidden"}>${totalUnread > 99 ? "99+" : totalUnread}</b>` : ""}</span><span>${label}</span></a>`).join("");
+}
+
+let messageObserver;
+function observeMessages() {
+  messageObserver?.disconnect();
+  const [page,id] = route(), role = state.role;
+  const history = screen.querySelector(".chat-history");
+  if (page !== "chat" || !id || !history || document.hidden || dialog.open || !globalThis.IntersectionObserver) return;
+  const thread = state.messages[id] || [];
+  messageObserver = new IntersectionObserver(entries => {
+    if (document.hidden || dialog.open || route()[0] !== "chat" || route()[1] !== id || state.role !== role) return;
+    let changed = false;
+    for (const entry of entries) {
+      const msg = thread[Number(entry.target.dataset.messageIndex)];
+      if (entry.target.isConnected && entry.isIntersecting && entry.intersectionRatio > 0 && msg && msg.sender !== role && !msg.read) {
+        msg.read = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      save();
+      const count = totalChatUnread(role);
+      const label = navigation.querySelector(".nav-unread");
+      if (label) { label.hidden = !count; label.textContent = count > 99 ? "99+" : count; label.setAttribute("aria-label", `안 읽은 메시지 ${count}개`); }
+    }
+  }, {threshold: [0, 0.01]});
+  history.querySelectorAll("[data-message-index]").forEach(el => messageObserver.observe(el));
+}
+document.addEventListener("visibilitychange", observeMessages);
+dialog.addEventListener("close", observeMessages);
+
+function billingMonth() {
+  return new Date(Date.now() + 9 * 3600000).toISOString().slice(0,7);
+}
+
+async function benefitAction(action, id) {
+  const uid = state.role, month = billingMonth();
+  const plan = state.memberships[uid] || {id: uid, active: false, grants: {}, actions: []};
+  if (action === "demo-subscription" && !accountMode) plan.active = !plan.active;
+  else if (action === "demo-grant" && !accountMode && plan.active) {
+    (plan.grants ??= {})[month] = (plan.grants[month] || 0) + 1;
+  } else {
+    if (!plan.active || (plan.actions || []).some(a => a.type === action && a.target === id && (action === "pickup" || a.month === month))) return;
+    if (action === "promote" && (!(quota(plan,month) > 0) || itemById(id)?.owner !== uid)) return;
+    if (action === "pickup" && (rentalById(id)?.renterId !== uid || rentalById(id)?.status !== "active")) return;
+    if (!["promote","pickup"].includes(action)) return;
+    (plan.actions ??= []).push({type: action, target: id, month});
+  }
+  state.memberships[uid] = plan;
+  const saving = save();
+  if (!saving || await saving) render();
 }
 
 function chatAllowed(rental) {
@@ -318,7 +552,7 @@ async function tradeAction(action) {
     showDialog("손상·누락 신고", noteForm("dispute", rental, "확인한 손상이나 누락 내용을 적어주세요.", "신고 접수"));
   } else if (action === "resolve" && state.role === "admin" && rental.status === "disputed") {
     showDialog("관리자 검토", noteForm("resolve", rental, "검토 의견을 적어주세요.", "검토 완료"));
-  } else if (action === "review" && borrows && rental.status === "complete" && !rental.review) {
+  } else if (action === "review" && canReview(rental, state.role)) {
     showDialog("별점·후기 작성", noteForm("review", rental, "대여 경험을 적어주세요.", "후기 등록",
       '<label>별점<select name="rating"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select></label>'));
   }
@@ -531,6 +765,7 @@ async function updateTrade(rental, status, recipient, message) {
     await runLifecycle(action, { rentalId: rental.id, inspection: rental.inspection });
     return true;
   }
+  if (status === "complete" && rental.status !== status) rental.completedAt = Date.now();
   rental.status = status;
   if (recipient) announce(recipient, rental, message);
   const saving = save();
@@ -563,17 +798,20 @@ function assistantSession(role = state.role) {
 }
 
 function assistantItems() {
-  return allItems().filter(item => item.owner !== state.role).map(item => ({
+  const criteria = assistantSession().criteria ?? filters;
+  return filteredListings(criteria).filter(item => item.owner !== state.role).map(item => ({
     id: item.id, title: item.title, category: item.category, neighborhood: item.neighborhood,
     price: item.price, description: item.description ?? "",
-    availability: availabilityLabel(item, false),
+    availability: criteria.date.start ? criteria.date.start + " ~ " + criteria.date.end + " 대여 가능" : availabilityLabel(item, false),
   }));
 }
 
 async function sendAssistant() {
   const role = state.role, session = assistantSession(role);
   if (session.busy) return;
-  const request = sendAIMessage(session, assistantItems(), localDay());
+  const items = assistantItems();
+  if (!items.length) { session.error = "조건에 맞는 물품이 없어요. 날짜나 예산을 조정해 주세요."; render(); return; }
+  const request = sendAIMessage(session, items, localDay());
   render();
   await request;
   if (route()[0] === "assistant" && state.role === role) {
@@ -597,6 +835,14 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const { action, id } = target.dataset;
+
+  if (action === "start-inquiry") {
+    await startInquiry(id);
+    return;
+  }
+  if (["demo-subscription","demo-grant","promote","pickup"].includes(action)) {
+    await benefitAction(action,id); return;
+  }
   if (action.startsWith("listing-")) {
     if (["listing-gallery", "listing-photo-enlarge"].includes(action)) {
       const item = itemById(route()[1]);
@@ -899,8 +1145,14 @@ async function submit(form) {
     return;
   }
 
-  if (kind === "ai-room") {
+    if (kind === "ai-room") {
     assistantSession().draft = fields.get("question") ?? "";
+    assistantSession().criteria = {
+      ...filters,
+      date: {},
+      maxPrice: null
+    };
+
     await sendAssistant();
     return;
   }
@@ -1005,6 +1257,33 @@ async function submit(form) {
     return;
   }
 
+  if (kind === "inquiry-message") {
+    const room = inquiryById(id);
+
+    if (!room || !isInquiryParty(room, state.role)) return;
+
+    const message = String(fields.get("message") ?? "").trim();
+
+    if (!message || message.length > 350) return;
+
+    (state.messages[id] ??= []).push({
+      id: newId(),
+      sender: state.role,
+      text: message,
+      sentAt: Date.now()
+    });
+
+    const saving = save();
+    if (saving && !await saving) return;
+
+    if (route()[0] === "chat" && route()[1] === id) {
+      render();
+      screen.querySelector(".compose input")?.focus();
+    }
+
+    return;
+  }
+
   const rental = rentalById(id);
   if (!rental) return;
   const owns = state.role === rental.lenderId;
@@ -1048,11 +1327,11 @@ async function submit(form) {
       rental.resolution = note;
       announce(rental.lenderId, rental, "관리자 검토가 끝났어요. 반납 상태를 확인해 주세요.");
       await updateTrade(rental, "checking", rental.renterId, "관리자가 신고 내용을 검토했어요.");
-    } else if (kind === "review" && borrows && rental.status === "complete" && !rental.review) {
+    } else if (kind === "review" && canReview(rental, state.role)) {
       const rating = Number(fields.get("rating"));
       if (!Number.isInteger(rating) || rating < 1 || rating > 5) return;
-      rental.review = { rating, text: note };
-      await updateTrade(rental, "complete");
+      (rental.feedback ??= {})[seat(rental, state.role)] = { rating, text: note };
+      if (await updateTrade(rental, "complete") && accountMode) location.reload();
     }
   }
 }
@@ -1093,18 +1372,33 @@ if (accountMode) {
 }
 render();
 
-if (photoStorageError) showToast(photoStorageError);
-
-if (lifecycleEnabled) {
+if (persistDatabase) {
+  let refreshing = false;
   setInterval(async () => {
-    if (databaseFailed || lifecycleBusy || dialog.open || document.hidden || !["rentals", "trade"].includes(route()[0])) return;
-    lifecycleBusy = true;
+    if (refreshing || lifecycleBusy || databaseFailed || document.hidden || dialog.open) return;
+    refreshing = true;
     try {
-      const before = JSON.stringify([state.rentals, state.notices]);
-      persistDatabase = await connectRentalDatabase(state, account?.uid);
-      if (before !== JSON.stringify([state.rentals, state.notices])) render();
-    }
-    catch (error) { showToast(error.message); }
-    finally { lifecycleBusy = false; }
-  }, 10000);
+      const previousIds = new Set(Object.values(state.messages).flat().map(m => m.id));
+      if (!await persistDatabase.refresh()) return;
+      const arrived = Object.values(state.messages).flat().some(m => !previousIds.has(m.id) && m.sender !== state.role && !m.read);
+      if (arrived) showToast("새 채팅 메시지가 도착했어요.");
+      const [page] = route();
+      if (["chat", "profile", "person", "membership", "trade", "rentals"].includes(page) && !dialog.open) {
+        const input = screen.querySelector('[name="message"]');
+        const draft = input?.value, focused = input && document.activeElement === input;
+        const history = screen.querySelector(".chat-history");
+        const scroll = history && history.scrollHeight - history.scrollTop - history.clientHeight > 4 ? history.scrollTop : null;
+        render();
+        const updated = screen.querySelector('[name="message"]');
+        if (updated && draft !== undefined) { updated.value = draft; if (focused) updated.focus({preventScroll:true}); }
+        if (scroll !== null && screen.querySelector(".chat-history")) screen.querySelector(".chat-history").scrollTop = scroll;
+      } else {
+        const count = totalChatUnread();
+        const label = navigation.querySelector(".nav-unread");
+        if (label) { label.hidden = !count; label.textContent = count > 99 ? "99+" : count; label.setAttribute("aria-label", `안 읽은 메시지 ${count}개`); }
+      }
+    } catch { /* Connection can recover on the next foreground refresh. */ }
+    finally { refreshing = false; }
+  }, 5000);
 }
+if (photoStorageError) showToast(photoStorageError);
