@@ -8,3 +8,7 @@ firebase-debug*.log
 firestore-debug*.log
 firebase-data/
 .env.rento-auth
+
+.env
+
+*.bak
