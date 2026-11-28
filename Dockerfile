@@ -17,7 +17,8 @@ COPY frontend/index.html frontend/styles.css frontend/
 COPY frontend/src frontend/src
 COPY frontend/assets frontend/assets
 
-RUN PYTHONPATH=backend python -c "from photo_compare import load_model; load_model()"
+RUN PYTHONPATH=backend python -c "from photo_compare import load_model; load_model()" \
+    && chmod -R a+rX backend frontend
 
 USER 65532:65532
 WORKDIR /app/backend
