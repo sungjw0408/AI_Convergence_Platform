@@ -1,3 +1,4 @@
+import { photoTiming } from "./handoff-photos.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import { photoUrl } from "./photo-store.js";
 import { comparisonSummary, currentResult, inspectionRecord } from "./inspection.js";
@@ -12,9 +13,9 @@ function photo(record, view, phase, escape, enlarged = false) {
   const label = phase === "before" ? "대여 전" : "반납 후";
   const result = currentResult(record, view.id);
   const content = source ? `<div class="diff-canvas"><img src="${escape(source)}" alt="${escape(view.label)} ${label} 사진">${phase === "after" ? markers(result) : ""}</div>`
-    : `<div class="inspection-photo-empty">${icon("photo")}<span>${record[phase][view.id] ? "사진을 불러올 수 없어요" : "사진 등록 전"}</span></div>`;
+    : `<div class="inspection-photo-empty">${icon("photo")}<span>${record[phase][view.id] ? "사진을 불러올 수 없어요" : record[`${phase}PhotoSkipped`] ? "사진 미등록" : "사진 등록 전"}</span></div>`;
   return `<figure class="inspection-photo">${!enlarged && source ? `<button type="button" data-action="view-inspection" data-id="${view.id}" aria-label="${escape(view.label)} ${label} 사진 확대">${content}</button>` : content}
-    <figcaption>${label}${enlarged && source && record[phase][view.id]?.capturedAt ? ` · <a href="${escape(source)}" download="${phase}-original.png">원본 저장</a>` : ""}</figcaption></figure>`;
+    <figcaption>${label}${phase === "before" && record.handoffReview ? `<small>${escape(photoTiming(record.before[view.id]))}</small>` : ""}${enlarged && source && record[phase][view.id]?.capturedAt ? ` · <a href="${escape(source)}" download="${phase}-original.png">원본 저장</a>` : ""}</figcaption></figure>`;
 }
 
 const retakeMessage = (result) => {
@@ -27,7 +28,8 @@ const retakeMessage = (result) => {
 
 export function inspectionCard(rental, item, feedback, selected, escape) {
   const record = inspectionRecord(rental, item);
-  if (!Object.keys(record.before).length && !Object.keys(record.after).length) return "";
+  const skipped = record.beforePhotoSkipped || record.afterPhotoSkipped;
+  if (!skipped && !Object.keys(record.before).length && !Object.keys(record.after).length) return "";
   const views = record.plan.views;
   const view = views.find((v) => v.id === selected)
     || views.find((v) => currentResult(record, v.id)?.status === "changes")
@@ -39,6 +41,7 @@ export function inspectionCard(rental, item, feedback, selected, escape) {
   return `<section class="inspection-card" aria-labelledby="inspection-title">
     <div class="inspection-heading"><h2 id="inspection-title">물품 상태 확인</h2><span>${views.length}개 부위</span></div>
     <div class="inspection-summary ${summary.kind}" role="status">${icon(summary.kind === "clear" ? "check" : "photo")}<div><strong>${summary.title}</strong><p>${summary.detail}</p></div></div>
+    ${record.handoffReview ? `<p class="hint">공급자 상태 확인 ${record.handoffReview.lenderConfirmedAt ? '완료' : '대기'} · 대여자 상태 확인 ${record.handoffReview.renterConfirmedAt ? '완료' : '대기'}. 등록 사진과 재촬영 사진을 기준으로 비교해요.</p>` : ''}
     ${views.length > 1 ? `<div class="inspection-tabs" aria-label="촬영 부위">${views.map((v) => {
       const r = currentResult(record, v.id);
       return `<button type="button" data-action="inspection-view" data-id="${v.id}" aria-pressed="${v.id === view.id}">${escape(v.label)}${["changes", "retake"].includes(r?.status) ? '<span class="inspection-dot" aria-label="확인 필요"></span>' : ""}</button>`;
@@ -50,7 +53,7 @@ export function inspectionCard(rental, item, feedback, selected, escape) {
       : result?.status === "clear" ? '<p>이 부위에서 눈에 띄는 변화가 발견되지 않았어요.</p>' : ""}</div>` : ""}
     ${record.plan.checks.length ? `<details class="inspection-check-summary"><summary>구성품·작동 확인</summary><ul>${record.plan.checks.map((check) => `<li><span>${escape(check.label)}</span><small>대여 전 ${(record.beforeChecks || []).includes(check.id) ? "확인" : "미확인"} · 반납 ${(record.afterChecks || []).includes(check.id) ? "확인" : "확인 전"}</small></li>`).join("")}</ul></details>` : ""}
     ${record.beforeNote || record.afterNote ? `<div class="inspection-notes">${record.beforeNote ? `<p><strong>대여 전 메모</strong><span>${escape(record.beforeNote)}</span></p>` : ""}${record.afterNote ? `<p><strong>반납 메모</strong><span>${escape(record.afterNote)}</span></p>` : ""}</div>` : ""}
-    ${!waiting && views.some((v) => v.compare) ? `<button class="inspection-retry" type="button" data-action="analyze-trade" ${feedback?.busy ? "disabled" : ""}>${feedback?.busy ? "사진 확인 중…" : feedback?.error || views.some((v) => v.compare && !currentResult(record, v.id)) ? "사진 확인 다시 시도" : "사진 다시 확인"}</button>` : ""}
+    ${!skipped && !waiting && views.some((v) => v.compare) ? `<button class="inspection-retry" type="button" data-action="analyze-trade" ${feedback?.busy ? "disabled" : ""}>${feedback?.busy ? "사진 확인 중…" : feedback?.error || views.some((v) => v.compare && !currentResult(record, v.id)) ? "사진 확인 다시 시도" : "사진 다시 확인"}</button>` : ""}
   </section>`;
 }
 

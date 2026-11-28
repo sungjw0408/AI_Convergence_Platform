@@ -1,3 +1,9 @@
+import { introductionIds, introductionPool, introductionPhotos, setIntroductionCover, toggleIntroductionPhoto } from "./listing-presentation.js";
+import { registrationBaseline, photoTiming } from "./handoff-photos.js";
+import { bindSelectPickers } from "./select-picker.js";
+bindSelectPickers(document);
+import { bindReservationPicker } from "./reservation-picker.js";
+bindReservationPicker(document);
 import { depositBlock, depositQuote, itemValueFrom, rentalDepositSnapshot } from "./listing-pricing.js";
 import { getListingDraft, getPriceRecommendation, pricingContextFrom } from "./listing-advice.js";
 import { rankListings, recommendationCandidates } from "./listing-recommendations.js";
@@ -14,7 +20,7 @@ import { completeDraft, currentResult, inspectionRecord, inspectionSources } fro
 import { inspectionPhotoDialog } from "./inspection-view.js";
 import { addListingPhotos, assignListingView, hasOnlyListingCameraPhotos, listingCaptureContext, listingSources, maxListingPhotos, missingListingViews, newListingDraft, removeListingPhoto, replaceListingPhoto, syncListingPlan } from "./listing-photos.js";
 import { validateListingStep } from "./listing-registration.js";
-import { itemGallery, listingPhotoPanel } from "./listing-photo-view.js";
+import { itemGallery, listingPhotoPanel, listingStatePhotos, introductionPhotoPanel } from "./listing-photo-view.js";
 import { icon } from "./icons.js?v=rento-home-5-ren";
 import {
   catalog, categories, findAvailability, initialState, localDay, neighborhoods, people, readState,
@@ -22,7 +28,7 @@ import {
 } from "./model.js?v=rento-home-5-ren";
 import {
   aiRoomPage, chatPage, comparePage, conversationPage, inquiryPage, dateInputs, escape, home, itemPage, listingRows,
-  membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
+  membershipPage, missingPage, modal, pageHeader, profilePage, registerPage, reputationPanel, reviewForm,
   rentalEstimate, rentalsPage, tradePage,
 } from "./views.js?v=rento-team2-develop-5";
 
@@ -39,6 +45,7 @@ const toast = document.querySelector("#toast");
 const databaseMode = document.querySelector('meta[name="rento-database"]')?.content;
 const accountMode = databaseMode === "accounts";
 const depositPolicy = JSON.parse(document.querySelector('meta[name="rento-deposit-policy"]')?.content ?? "null");
+const testPhotoSkipEnabled = !accountMode && document.querySelector('meta[name="rento-test-photo-skip"]')?.content === "enabled";
 const lifecycleEnabled = document.querySelector('meta[name="rento-lifecycle"]')?.content === "enabled";
 let lifecycleBusy = false;
 const preferencesKey = "rento-firestore-preferences-v1";
@@ -75,7 +82,7 @@ if (databaseMode) {
   } catch (error) { databaseFailed = true; databaseError(error); }
 }
 const filters = { query: "", category: "전체", date: {}, maxPrice: null };
-let direction = state.role === "lender" ? "out" : "in";
+let direction = "in";
 let toastTimeout;
 
 const samplePair = { before: "./assets/proof-before.webp", after: "./assets/proof-after.webp" };
@@ -99,6 +106,7 @@ catch (error) { photoStorageError = error.message; }
 async function analyzeTrade(rental, force = false) {
   if (comparisonFeedback.get(rental.id)?.busy) return;
   const record = inspectionRecord(rental, itemById(rental.itemId));
+  if (record.beforePhotoSkipped || record.afterPhotoSkipped) return;
   const views = record.plan.views.filter((view) => view.compare && record.before[view.id] && record.after[view.id]);
   if (!views.length) return;
   const progress = { busy: true, completed: 0, total: views.length };
@@ -279,6 +287,10 @@ function homeRows() {
     reasons, state.displayNames, false, state.profilePhotos);
 }
 
+function reputationFor(uid) {
+  return state.publicReputation?.[uid] ?? reputation(state.rentals, uid);
+}
+
 function render() {
   if (databaseFailed) return;
   const [page, id] = route();
@@ -299,7 +311,7 @@ function render() {
   else if (page === "assistant") content = aiRoomPage(assistantSession(), visibleListing);
   else if (page === "item") {
     const item = visibleListing(id);
-    if (item) content = itemPage(item, role, filters.date, gallerySelections.get(id), depositPolicy, accountMode, lifecycleEnabled);
+    if (item) content = itemPage(item, role, filters.date, gallerySelections.get(id), depositPolicy, accountMode, lifecycleEnabled, chatProfiles);
   }
   else if (page === "new") content = registerPage(role, state.area, listingDraft(), depositPolicy);
   else if (page === "rentals") content = rentalsPage(state.rentals, itemById, role, direction);
@@ -351,13 +363,9 @@ function render() {
     content = pageHeader(title, "#profile") + `<div class="content">${items.length ? rowsFor(items, managing)
       : `<p class="notice">${page === "saved" ? "아직 관심 물품이 없어요." : "아직 올린 물품이 없어요."}</p>`}</div>`;
   }
-   if ((page === "profile" || page === "person") &&
-      (page === "profile" || id)) {
-
-    const uid = page === "profile" ? role : id;
-
-    const stats = state.publicReputation?.[uid]
-      ?? reputation(state.rentals, uid);
+  if (page === "person" && id) {
+    const uid = id;
+    const stats = reputationFor(uid);
 
     const mean = stats.reviews.length
       ? (stats.reviews.reduce((n, r) => n + r.rating, 0)
@@ -402,55 +410,47 @@ function render() {
              </p>`}
       </section>`;
 
-    if (page === "profile") {
-      content += `
-        <section class="content stack">
-          <h2>거래 평판</h2>
+    content = pageHeader("상대방 프로필", "#home") + `
+      <div class="content stack person-page">
+
+        <section class="person-card">
+
+          <div class="person-avatar">
+            ${profileImage(state.profilePhotos?.[uid], escape) || icon("user")}
+          </div>
+
+          <h2>${escape(name)}</h2>
+
           ${reputationHTML}
-          ${reviewsHTML}
-        </section>`;
-    } else {
-      content = pageHeader("상대방 프로필", "#home") + `
-        <div class="content stack person-page">
 
-          <section class="person-card">
+          ${uid !== role && role !== "admin" ? `
+            <button
+              class="button primary person-chat-button"
+              data-action="start-inquiry"
+              data-id="${escape(uid)}">
+              ${icon("chat")}
+              채팅하기
+            </button>
+          ` : ""}
 
-            <div class="person-avatar">
-              ${profileImage(state.profilePhotos?.[uid], escape) || icon("user")}
-            </div>
+        </section>
 
-            <h2>${escape(name)}</h2>
+        <section class="person-section">
+          <h2>등록한 물품 (${ownerItems.length})</h2>
 
-            ${reputationHTML}
+          ${ownerItems.length
+            ? rowsFor(ownerItems)
+            : `<p class="person-empty">
+                 등록한 물품이 없어요.
+               </p>`}
+        </section>
 
-            ${uid !== role && role !== "admin" ? `
-              <button
-                class="button primary person-chat-button"
-                data-action="start-inquiry"
-                data-id="${escape(uid)}">
-                ${icon("chat")}
-                채팅하기
-              </button>
-            ` : ""}
+        ${reviewsHTML}
 
-          </section>
-
-          <section class="person-section">
-            <h2>등록한 물품 (${ownerItems.length})</h2>
-
-            ${ownerItems.length
-              ? rowsFor(ownerItems)
-              : `<p class="person-empty">
-                   등록한 물품이 없어요.
-                 </p>`}
-          </section>
-
-          ${reviewsHTML}
-
-        </div>`;
-    }
+      </div>`;
   }
   screen.innerHTML = content ?? missingPage();
+  screen.closest(".app-shell")?.classList.toggle("thread-active", Boolean(screen.querySelector(".conversation-content")));
   const history = screen.querySelector(".chat-history");
   if (history) history.scrollTop = history.scrollHeight;
   observeMessages();
@@ -579,6 +579,9 @@ async function tradeAction(action) {
     showToast("기존 시연 거래는 조회만 가능해요. 날짜·시각을 지정해 새로 신청해 주세요."); return;
   }
   const tradeItem = itemById(rental.itemId);
+  if (action === "receive" && borrows && rental.status === "handover" && rental.inspection?.handoffReview) {
+    showDialog("물품 상태·수령 확인", receiveReviewForm(rental));return;
+  }
   if (rental.lifecycleVersion === 1 && ["confirm", "reject", "receive", "complete"].includes(action)) {
     try { await runLifecycle(({confirm: "approve", reject: "reject", receive: "receive", complete: "complete"})[action], {rentalId: rental.id}); }
     catch (error) { showToast(error.message); }
@@ -602,8 +605,8 @@ async function tradeAction(action) {
     showDialog("예약 취소", `<form data-form="cancel" data-id="${rental.id}" class="form-card plain">
       <p>이 대여 신청을 취소하시겠어요?</p><button class="button primary" type="submit">취소 확정</button>
     </form>`);
-  } else if (action === "handoff" && owns && rental.status === "confirmed") {
-    showDialog("대여 전 사진 촬영", evidenceForm("handoff", rental));
+  } else if (["handoff", "handoff-update"].includes(action) && owns && rental.status === (action === "handoff" ? "confirmed" : "handover")) {
+    showDialog(registrationBaseline(tradeItem) ? "인도 전 상태 확인" : "대여 전 사진 촬영", evidenceForm(action, rental));
   } else if (action === "receive" && borrows && rental.status === "handover") {
     await updateTrade(rental, "active", rental.lenderId, "대여자가 물품 수령을 확인했어요.");
   } else if (action === "return" && borrows && rental.status === "active") {
@@ -617,14 +620,13 @@ async function tradeAction(action) {
   } else if (action === "resolve" && state.role === "admin" && rental.status === "disputed") {
     showDialog("관리자 검토", noteForm("resolve", rental, "검토 의견을 적어주세요.", "검토 완료"));
   } else if (action === "review" && canReview(rental, state.role)) {
-    showDialog("별점·후기 작성", noteForm("review", rental, "대여 경험을 적어주세요.", "후기 등록",
-      '<label>별점<select name="rating"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select></label>'));
+    showDialog("거래 후기", reviewForm(rental, tradeItem, state.role, { displayNames: state.displayNames }));
   }
 }
 
-function noteForm(kind, rental, placeholder, action, fields = "") {
+function noteForm(kind, rental, placeholder, action) {
   return `<form data-form="${kind}" data-id="${rental.id}" class="form-card plain">
-    ${fields}<label>내용<textarea name="note" maxlength="500" rows="4" placeholder="${placeholder}" required></textarea></label>
+    <label>내용<textarea name="note" maxlength="500" rows="4" placeholder="${placeholder}" required></textarea></label>
     ${formErrorMarkup}<button class="button primary" type="submit">${action}</button>
   </form>`;
 }
@@ -633,32 +635,39 @@ function evidenceDraft(kind, rental) {
   const key = `${rental.id}:${kind}`;
   if (!evidenceDrafts.has(key)) {
     const record = inspectionRecord(rental, itemById(rental.itemId));
-    evidenceDrafts.set(key, { plan: structuredClone(record.plan),
-      photos: kind === "return-update" ? { ...record.after } : {},
-      checks: kind === "return-update" ? [...(record.afterChecks || [])] : [],
-      note: kind === "return-update" ? record.afterNote || "" : "" });
+    const baseline = kind.startsWith('handoff') ? registrationBaseline(itemById(rental.itemId)) : null;
+    evidenceDrafts.set(key, { plan: structuredClone(baseline?.plan || record.plan), reuseListing: Boolean(baseline), confirmedViews: [],
+      photos: kind === 'handoff-update' ? {...record.before} : kind === "return-update" ? { ...record.after } : baseline ? {...baseline.photos} : {},
+      checks: kind === "handoff-update" ? [...(record.beforeChecks || [])] : kind === "return-update" ? [...(record.afterChecks || [])] : [],
+      note: kind === "handoff-update" ? record.beforeNote || "" : kind === "return-update" ? record.afterNote || "" : "" });
   }
   return evidenceDrafts.get(key);
+}
+
+function receiveReviewForm(rental) {
+  const record=inspectionRecord(rental,itemById(rental.itemId));
+  return `<form data-form="receive-check" data-id="${rental.id}" class="form-card plain"><input type="hidden" name="handoffRevision" value="${escape(record.handoffReview?.revisionId || '')}"><p class="hint">공급자와 함께 사진·실물 상태를 확인해 주세요. 사진과 다르면 수령을 확정하기 전에 공급자에게 해당 부위의 재촬영을 요청해 주세요.</p><div class="listing-state-grid">${record.plan.views.map(view=>{const p=record.before[view.id];return `<figure><img src="${escape(photoUrl(p?.source))}" alt="${escape(view.label)}"><figcaption>${escape(view.label)}<small>${escape(photoTiming(p))}</small></figcaption><label><input type="checkbox" name="confirmedView" value="${view.id}">실물 상태를 확인했어요</label></figure>`;}).join('')}</div>${record.plan.checks.map(c=>`<label class="handoff-face-check"><input type="checkbox" name="check" value="${c.id}">${escape(c.label)}</label>`).join('')}${formErrorMarkup}<button type="submit" class="button primary">상태 확인 · 수령 완료</button></form>`;
 }
 
 function evidenceForm(kind, rental) {
   const draft = evidenceDraft(kind, rental);
   const count = draft.plan.views.filter((view) => draft.photos[view.id]).length;
-  const returning = kind !== "handoff";
+  const returning = !kind.startsWith("handoff");
   return `<form data-form="${kind}" data-id="${rental.id}" class="form-card plain inspection-form">
-    <p class="inspection-intro">${returning ? "대여 전 사진에 맞춰 각 부위를 촬영해 주세요." : "물품을 전달하기 전, 아래 부위의 상태를 기록해 주세요."}</p>
-    <div class="inspection-progress"><strong>사진 ${count}/${draft.plan.views.length}</strong><span>${count === draft.plan.views.length ? "촬영 완료" : "모든 부위를 촬영해 주세요"}</span></div>
+    <p class="inspection-intro">${returning ? "대여 전 사진에 맞춰 각 부위를 촬영해 주세요." : draft.reuseListing ? "등록 사진과 현재 상태를 비교해 주세요. 달라진 부위만 다시 촬영하면 돼요." : "물품을 전달하기 전, 아래 부위의 상태를 기록해 주세요."}</p>
+    <div class="inspection-progress"><strong>사진 ${count}/${draft.plan.views.length}</strong><span>${draft.reuseListing ? "각 부위의 현재 상태를 확인해 주세요" : count === draft.plan.views.length ? "촬영 완료" : "모든 부위를 촬영해 주세요"}</span></div>
     <div class="inspection-capture-grid">${draft.plan.views.map((view, i) => {
       const picture = draft.photos[view.id];
       const source = picture?.preview || photoUrl(picture?.source);
-      return `<button type="button" class="inspection-capture-tile ${picture ? "captured" : ""}" data-action="capture-evidence" data-id="${view.id}">
+      return `<div class="handoff-photo-entry"><button type="button" class="inspection-capture-tile ${picture ? "captured" : ""}" data-action="capture-evidence" data-id="${view.id}">
         ${source ? `<img src="${escape(source)}" alt="${escape(view.label)} 촬영 사진">` : `<span class="inspection-capture-placeholder">${icon("photo")}</span>`}
-        <span class="inspection-capture-label"><strong>${i+1}. ${escape(view.label)}</strong><span>${picture ? "다시 촬영" : "촬영하기"}</span></span></button>`;
+        <span class="inspection-capture-label"><strong>${i+1}. ${escape(view.label)}</strong><span>${picture ? draft.reuseListing ? "변경 부위 촬영" : "다시 촬영" : "촬영하기"}</span></span></button>${draft.reuseListing ? `<small class="hint">${escape(picture?.blob ? '인도 전 재촬영' : photoTiming(picture))}</small><label class="handoff-face-check"><input type="checkbox" name="confirmedView" value="${view.id}" ${draft.confirmedViews.includes(view.id) ? 'checked' : ''}>현재 상태와 같아요</label>` : ''}</div>`;
     }).join("")}</div>
     ${draft.plan.checks.length ? `<fieldset class="inspection-checks"><legend>직접 확인해 주세요</legend>${draft.plan.checks.map((check) => `<label><input type="checkbox" name="check" value="${check.id}" ${draft.checks.includes(check.id) ? "checked" : ""}><span>${escape(check.label)}</span></label>`).join("")}</fieldset>` : ""}
     <label><span>알려둘 상태 <small class="hint">선택</small></span><textarea name="condition-note" maxlength="500" rows="2" placeholder="${returning ? "사용 중 발견한 변화나 구성품 상태를 적어 주세요." : "기존 흠집이나 구성품의 특이사항을 적어 주세요."}">${escape(draft.note)}</textarea></label>
     ${returning ? '<p class="hint">사진 비교가 어려워도 반납 요청은 유지되며, 상대방이 직접 상태를 확인할 수 있어요.</p>' : ""}
-    ${formErrorMarkup}<button class="button primary" type="submit">${kind === "handoff" ? "사진 등록 · 물품 전달" : kind === "return-update" ? "사진 업데이트" : "사진 등록 · 반납 요청"}</button>
+    ${formErrorMarkup}<button class="button primary" type="submit">${kind.startsWith("handoff") ? draft.reuseListing ? "상태 확인 · 물품 전달" : "사진 등록 · 물품 전달" : kind === "return-update" ? "사진 업데이트" : "사진 등록 · 반납 요청"}</button>
+    ${testPhotoSkipEnabled ? `<button class="button secondary" type="submit" data-skip-photos="true">테스트용 · 사진 없이 ${kind.startsWith("handoff") ? "물품 전달" : "반납 요청"}</button><p class="hint">사진을 생략하면 AI 사진 비교는 진행하지 않아요.</p>` : ""}
   </form>`;
 }
 
@@ -670,6 +679,8 @@ function rememberListingFields(form) {
 
 function refreshListingPhotos(form, draft = listingDraft()) {
   if (!form?.isConnected || form.dataset.form !== "register") return;
+  const introPanel = form.querySelector("#listing-intro-panel");
+  if (introPanel) introPanel.outerHTML = introductionPhotoPanel(draft, escape);
   const panel = form.querySelector("#listing-photo-panel");
   if (panel) panel.outerHTML = listingPhotoPanel(draft, escape);
   const submit = form.querySelector('[type="submit"]');
@@ -763,7 +774,7 @@ function captureDemo(slot) {
 }
 
 function canSubmitEvidence(kind, rental, role = state.role) {
-  return kind === "handoff" ? rental.lenderId === role && rental.status === "confirmed"
+  return kind.startsWith("handoff") ? rental.lenderId === role && rental.status === (kind === "handoff" ? "confirmed" : "handover")
     : rental.renterId === role && (kind === "return" ? rental.status === "active" : kind === "return-update" && rental.status === "checking");
 }
 
@@ -776,51 +787,62 @@ function captureEvidence(form, viewId) {
   if (!view) return;
   const status = rental.status;
   const record = inspectionRecord(rental, itemById(rental.itemId));
-  openCapture({ reference: kind === "handoff" ? null : record.before[view.id]?.source,
-    face: view.label, instruction: view.instruction, returning: kind !== "handoff", onCapture(capture) {
+  openCapture({ reference: kind.startsWith("handoff") ? draft.photos[view.id]?.source : record.before[view.id]?.source,
+    face: view.label, instruction: view.instruction, returning: !kind.startsWith("handoff"), onCapture(capture) {
     if (!form.isConnected || state.role !== role || rental.status !== status || !dialog.open) return;
     const previous = draft.photos[view.id];
     if (previous?.preview) URL.revokeObjectURL(previous.preview);
     capture.preview = URL.createObjectURL(capture.blob);
     draft.photos[view.id] = capture;
-    showDialog(kind === "handoff" ? "대여 전 사진 촬영" : "반납 사진 촬영", evidenceForm(kind, rental));
+    draft.confirmedViews = draft.confirmedViews.filter(id => id !== viewId);
+    showDialog(kind.startsWith("handoff") ? "인도 전 상태 확인" : "반납 사진 촬영", evidenceForm(kind, rental));
   } });
 }
 
-async function submitEvidence(form, rental, kind) {
+async function submitEvidence(form, rental, kind, skipPhotos = false) {
   const role = state.role, status = rental.status;
   const draft = evidenceDraft(kind, rental);
   draft.checks = new FormData(form).getAll("check");
   draft.note = form.elements["condition-note"].value.trim();
-  if (!completeDraft(draft)) { formError(form, "모든 부위의 사진을 촬영하고 확인 항목을 체크해 주세요."); return; }
+  draft.confirmedViews = new FormData(form).getAll("confirmedView");
+  if (draft.reuseListing && !skipPhotos && !draft.plan.views.every(v => draft.confirmedViews.includes(v.id))) { formError(form,"모든 부위를 현재 상태와 비교해 확인해 주세요.");return; }
+  if (skipPhotos && !testPhotoSkipEnabled) return;
+  if (skipPhotos && !draft.plan.checks.every((check) => draft.checks.includes(check.id))) {
+    formError(form, "직접 확인 항목을 모두 체크해 주세요."); return;
+  }
+  if (!skipPhotos && !completeDraft(draft)) { formError(form, "모든 부위의 사진을 촬영하고 확인 항목을 체크해 주세요."); return; }
   const photos = {};
   for (const view of draft.plan.views) {
     const capture = draft.photos[view.id];
+    if (!capture || (skipPhotos && draft.reuseListing)) continue;
     photos[view.id] = capture.blob ? { source: await saveOriginal(capture), capturedAt: capture.capturedAt,
       width: capture.width, height: capture.height, face: view.label } : capture;
   }
   if (!form.isConnected || role !== state.role || status !== rental.status || !dialog.open) return;
-  const before = kind === "handoff";
+  const before = kind.startsWith("handoff");
   const current = before ? null : inspectionRecord(rental, itemById(rental.itemId));
   const inspection = before
     ? { plan: draft.plan, before: photos, after: {}, beforeChecks: draft.checks, afterChecks: [], beforeNote: draft.note, results: {} }
     : { ...current, after: photos, afterChecks: draft.checks, afterNote: draft.note,
         returnHistory: [...(current.returnHistory || []), { photos: current.after, replacedAt: new Date().toISOString() }]
           .filter((entry) => Object.keys(entry.photos).length) };
+  inspection[before ? "beforePhotoSkipped" : "afterPhotoSkipped"] = skipPhotos && Object.keys(photos).length < draft.plan.views.length;
+  if (inspection.beforePhotoSkipped || inspection.afterPhotoSkipped) inspection.results = {};
+  if (before && draft.reuseListing && !skipPhotos) inspection.handoffReview = {listingId:rental.itemId,revisionId:crypto.randomUUID(),lenderConfirmedAt:Date.now(),renterConfirmedAt:null};
   if (rental.lifecycleVersion === 1) {
-    const command = before ? "handoff" : kind === "return-update" ? "reshoot" : "return";
-    await runLifecycle(command, { rentalId: rental.id, inspection });
+    const command = before ? kind === 'handoff-update' ? 'revise_handoff' : "handoff" : kind === "return-update" ? "reshoot" : "return";
+    await runLifecycle(command, { rentalId: rental.id, inspection, ...(draft.reuseListing && !skipPhotos ? {reuseListingPhotos:true,confirmedViews:draft.confirmedViews} : {}), ...(skipPhotos ? { skipPhotos: true } : {}) });
   } else {
     rental.inspection = inspection;
     if (before) {
-      rental.before = photos[draft.plan.views[0].id].source;
+      rental.before = Object.values(photos)[0]?.source || null;
       delete rental.sample;
     } else {
-      rental.after = photos[draft.plan.views[0].id].source;
+      rental.after = Object.values(photos)[0]?.source || null;
       delete rental.photoAnalysis;
     }
     const recipient = before ? rental.renterId : rental.lenderId;
-    const message = before ? "대여 전 상태 사진이 등록됐어요. 물품을 받으면 수령을 확인해 주세요."
+    const message = skipPhotos ? `테스트용으로 사진을 생략하고 ${before ? "물품 전달" : "반납 요청"}을 진행했어요.` : before ? "대여 전 상태 사진이 등록됐어요. 물품을 받으면 수령을 확인해 주세요."
       : kind === "return-update" ? "반납 상태 사진이 업데이트됐어요." : "반납 요청과 상태 사진이 도착했어요.";
     if (!await updateTrade(rental, before ? "handover" : "checking", recipient, message)) return;
   }
@@ -917,6 +939,10 @@ document.addEventListener("click", async (event) => {
   if (["demo-subscription","demo-grant","promote","pickup"].includes(action)) {
     await benefitAction(action,id); return;
   }
+  if (action === "view-reputation") {
+    if (route()[0] === "profile") showDialog("거래 평판", reputationPanel(reputationFor(state.role)));
+    return;
+  }
   if (action === "edit-profile") {
     if (account && route()[0] === "profile") showDialog("프로필 수정", profileEditForm(ownProfile(), escape));
     return;
@@ -943,10 +969,15 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (action.startsWith("listing-")) {
+    if (action === "listing-state-photos") {
+      const item = visibleListing(route()[1]);
+      if (item) showDialog("전체 상태 사진", listingStatePhotos(item, escape));
+      return;
+    }
     if (["listing-gallery", "listing-photo-enlarge"].includes(action)) {
       const item = visibleListing(route()[1]);
       if (!item) return;
-      const photos = item.photos?.length ? item.photos : [{ id: "legacy", source: item.image, label: item.title }];
+      const photos = introductionPhotos(item);
       const photo = photos.find((p) => p.id === id);
       if (!photo) return;
       if (action === "listing-gallery") {
@@ -990,11 +1021,22 @@ document.addEventListener("click", async (event) => {
       if (photo) showDialog("사진 확인", `<img class="listing-enlarged" src="${escape(photo.preview || photoUrl(photo.source))}" alt="촬영한 물품 사진">`);
       return;
     }
+    if (action === "listing-intro-add") { form.querySelector('[data-introduction-files]')?.click(); return; }
+    if (action === "listing-intro-toggle") {
+      try { toggleIntroductionPhoto(draft,id); } catch(error) { draft.error=error.message; refreshListingPhotos(form,draft); return; }
+    }
+    if (action === "listing-intro-remove") {
+      const photo = draft.introPhotos.find(p => p.id === id);
+      if (photo?.preview) URL.revokeObjectURL(photo.preview);
+      draft.introPhotos = draft.introPhotos.filter(p => p.id !== id);
+      if (draft.publicPhotoIds) draft.publicPhotoIds = draft.publicPhotoIds.filter(p => p !== id);
+      if (draft.coverId === id) draft.coverId = introductionIds(draft)[0] || draft.photos[0]?.id;
+    }
     if (action === "listing-camera") { openListingCamera(form); return; }
     if (action === "listing-photo-retake") { openListingCamera(form, id); return; }
     if (action === "listing-target" && draft.plan.views.some((v) => v.id === id)) draft.activeViewId = id;
     else if (action === "listing-photo-remove") removeListingPhoto(draft, id);
-    else if (action === "listing-cover" && draft.photos.some((p) => p.id === id)) draft.coverId = id;
+    else if (action === "listing-cover") { try { setIntroductionCover(draft,id); } catch(error) { draft.error=error.message;refreshListingPhotos(form,draft);return; } }
     draft.error = "";
     refreshListingPhotos(form, draft);
     return;
@@ -1083,7 +1125,7 @@ document.addEventListener("click", async (event) => {
   } else if (action === "notices") await openNotices();
   else if (action === "role" && !accountMode && Object.hasOwn(people, id)) {
     state.role = id;
-    direction = id === "lender" ? "out" : "in";
+    direction = "in";
     const saving = save();
     if (saving && !await saving) return;
     render();
@@ -1139,7 +1181,7 @@ document.addEventListener("input", (event) => {
       preview.outerHTML = depositPreview({ valueWon: valueWon.value, valueEvidence: valueEvidence.value }, depositPolicy, escape);
     }
   }
-  if (event.target.name === "condition-note" && ["handoff", "return", "return-update"].includes(event.target.form?.dataset.form)) {
+  if (event.target.name === "condition-note" && ["handoff", "handoff-update", "return", "return-update"].includes(event.target.form?.dataset.form)) {
     const rental = rentalById(event.target.form.dataset.id);
     if (rental) evidenceDraft(event.target.form.dataset.form, rental).note = event.target.value;
   }
@@ -1200,8 +1242,30 @@ async function readPhoto(file, evidence = false, maxLength = Infinity) {
 }
 
 document.addEventListener("change", async ({ target }) => {
+  if (target.name === "rating" && target.checked && target.form?.dataset.form === "review") {
+    const labels = ["매우 아쉬웠어요", "아쉬웠어요", "보통이었어요", "만족했어요", "아주 만족했어요"];
+    target.form.querySelector(".review-rating-caption").textContent = `${target.value}점 · ${labels[Number(target.value) - 1]}`;
+    formError(target.form, "");
+    return;
+  }
   if (target.form?.dataset.form === "register") {
     const form = target.form, draft = rememberListingFields(form);
+    if (target.matches('[data-introduction-files]')) {
+      const files = [...target.files];
+      try {
+        if (draft.introPhotos.length + files.length > 8) throw new Error('앨범 소개 사진은 최대 8장까지 추가할 수 있어요.');
+        const sources = await Promise.all(files.map(file => readPhoto(file, false, 45_000)));
+        for (let i=0;i<files.length;i++) {
+          const photo={id:crypto.randomUUID(),blob:files[i],source:sources[i],preview:URL.createObjectURL(files[i]),origin:'album'};
+          draft.introPhotos.push(photo);
+          draft.coverId ||= photo.id;
+          if (!draft.publicPhotoIds) draft.publicPhotoIds=introductionIds(draft);
+          if (draft.publicPhotoIds.length < 8) draft.publicPhotoIds.push(photo.id);
+        }
+        draft.error='';
+      } catch(error) { draft.error=error.message; }
+      refreshListingPhotos(form,draft);return;
+    }
     if (target.dataset.listingView) {
       if (!draft.busy) { assignListingView(draft, target.dataset.listingView, target.value); draft.error = ""; refreshListingPhotos(form, draft); }
       return;
@@ -1209,9 +1273,10 @@ document.addEventListener("change", async ({ target }) => {
     if (["title", "category"].includes(target.name)) updateListingPlan(form);
     return;
   }
-  if (["handoff", "return", "return-update"].includes(target.form?.dataset.form)) {
+  if (["handoff", "handoff-update", "return", "return-update"].includes(target.form?.dataset.form)) {
     const rental = rentalById(target.form.dataset.id);
     if (rental && target.name === "check") evidenceDraft(target.form.dataset.form, rental).checks = new FormData(target.form).getAll("check");
+    if (rental && target.name === "confirmedView") evidenceDraft(target.form.dataset.form, rental).confirmedViews = new FormData(target.form).getAll("confirmedView");
     return;
   }
   if (target.form?.dataset.form !== "compare-demo") return;
@@ -1241,7 +1306,7 @@ document.addEventListener("change", async ({ target }) => {
   }
 });
 
-async function submit(form) {
+async function submit(form, submitter) {
   const { form: kind, id } = form.dataset;
   const fields = new FormData(form);
   if (accountMode && (kind === "login" || kind === "signup")) {
@@ -1498,7 +1563,7 @@ async function submit(form) {
             height: photo.height, origin: "camera", addedAt: photo.addedAt,
             face: draft.plan.views.find((v) => v.id === photo.viewId)?.label || "추가 사진" });
           // Keep the camera original locally and use a bounded copy for other browsers.
-          source = databaseMode ? await readPhoto(photo.blob, false, 95_000) : original;
+          source = databaseMode ? await readPhoto(photo.blob, false, 45_000) : original;
           listingSavedSources.set(photo.blob, source);
         }
         photos.push({ id: photo.id, source, viewId: photo.viewId,
@@ -1516,9 +1581,22 @@ async function submit(form) {
         formError(form, "촬영 원본을 확인할 수 없어요. 앱 카메라로 다시 촬영해 주세요.");
         return;
       }
-      const cover = photos.find((photo) => photo.id === draft.coverId) || photos[0];
+      const selectedIds = introductionIds(draft).filter(id => introductionPool(draft).some(p => p.id === id));
+      if (!selectedIds.length) throw new Error('게시글에 보여줄 소개 사진을 한 장 이상 선택해 주세요.');
+      const presentationPhotos=[];
+      for (const id of selectedIds.slice(0,8)) {
+        const statePhoto=photos.find(p=>p.id===id);
+        if (statePhoto) presentationPhotos.push({id,photoId:id});
+        else {
+          const photo=draft.introPhotos.find(p=>p.id===id);
+          const source=databaseMode ? photo.source : await saveOriginal({...photo,origin:'album'});
+          presentationPhotos.push({id,source,origin:'album',label:'소개 사진'});
+        }
+      }
+      const coverId = selectedIds.includes(draft.coverId) ? draft.coverId : selectedIds[0];
+      const cover = photos.find(photo=>photo.id===coverId) || presentationPhotos.find(photo=>photo.id===coverId);
       const listing = { id: newId(), createdAt: Date.now(), title, description, price, deposit, itemValue, pricingContext, owner: role, category,
-        neighborhood: area, image: cover.source, photos, coverPhotoId: cover.id, inspectionPlan: structuredClone(draft.plan),
+        neighborhood: area, image: cover.source, photos, presentationPhotos, coverPhotoId: cover.id, inspectionPlan: structuredClone(draft.plan),
         availableFrom: date.start, availableTo: date.end };
       state.listings.unshift(listing);
       const saved = databaseMode ? await saveToDatabase() : writeState(state);
@@ -1527,7 +1605,7 @@ async function submit(form) {
         if (form.isConnected) formError(form, "저장하지 못했어요. 사진과 입력 내용은 유지돼요.");
         return;
       }
-      draft.photos.forEach((photo) => { if (photo.preview) URL.revokeObjectURL(photo.preview); });
+      introductionPool(draft).forEach((photo) => { if (photo.preview) URL.revokeObjectURL(photo.preview); });
       listingDrafts.delete(role);
     } finally {
       draft.busy = false;
@@ -1572,6 +1650,14 @@ async function submit(form) {
   if (!rental) return;
   const owns = state.role === rental.lenderId;
   const borrows = state.role === rental.renterId;
+  if (kind === 'receive-check' && borrows && rental.status === 'handover') {
+    const confirmedViews=fields.getAll('confirmedView'), confirmedChecks=fields.getAll('check');
+    const record=inspectionRecord(rental,itemById(rental.itemId));
+    if (!record.plan.views.every(v=>confirmedViews.includes(v.id)) || !record.plan.checks.every(c=>confirmedChecks.includes(c.id))) {formError(form,'모든 부위와 구성품·작동 상태를 확인해 주세요.');return;}
+    if(rental.lifecycleVersion===1) await runLifecycle('receive',{rentalId:rental.id,confirmedViews,confirmedChecks,handoffRevision:fields.get('handoffRevision')});
+    else {record.handoffReview.renterConfirmedAt=Date.now();await updateTrade(rental,'active',rental.lenderId,'대여자가 상태와 수령을 확인했어요.');}
+    return;
+  }
   if (kind === "lifecycle" && rental.lifecycleVersion === 1) {
     const data = Object.fromEntries(fields);
     data.rentalId = id;
@@ -1594,8 +1680,8 @@ async function submit(form) {
   } else if (kind === "cancel" && ((borrows && rental.status === "pending")
       || ((owns || borrows) && ["payment_pending", "confirmed", "handover"].includes(rental.status)))) {
     await updateTrade(rental, "canceled", owns ? rental.renterId : rental.lenderId, "대여 신청이 취소됐어요.");
-  } else if (["handoff", "return", "return-update"].includes(kind) && canSubmitEvidence(kind, rental)) {
-    await submitEvidence(form, rental, kind);
+  } else if (["handoff", "handoff-update", "return", "return-update"].includes(kind) && canSubmitEvidence(kind, rental)) {
+    await submitEvidence(form, rental, kind, submitter?.dataset.skipPhotos === "true");
   } else if (["dispute", "resolve", "review"].includes(kind)) {
     const note = fields.get("note").trim();
     if (!note) {
@@ -1613,7 +1699,10 @@ async function submit(form) {
       await updateTrade(rental, "checking", rental.renterId, "관리자가 신고 내용을 검토했어요.");
     } else if (kind === "review" && canReview(rental, state.role)) {
       const rating = Number(fields.get("rating"));
-      if (!Number.isInteger(rating) || rating < 1 || rating > 5) return;
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        formError(form, "별점을 선택해 주세요.");
+        return;
+      }
       (rental.feedback ??= {})[seat(rental, state.role)] = { rating, text: note };
       if (await updateTrade(rental, "complete") && accountMode) location.reload();
     }
@@ -1625,16 +1714,16 @@ document.addEventListener("submit", async (event) => {
   const form = event.target;
   if (!form.dataset.form) return;
   event.preventDefault();
-  const button = form.querySelector('button[type="submit"]');
-  if (button?.disabled) return;
-  if (button) button.disabled = true;
+  const buttons = [...form.querySelectorAll('button[type="submit"]')];
+  if (buttons.some((button) => button.disabled)) return;
+  for (const button of buttons) button.disabled = true;
   try {
-    await submit(form);
+    await submit(form, event.submitter);
   } catch (error) {
     if (form.querySelector(".form-error")) formError(form, error.message);
     else showToast("처리 중 문제가 생겼어요. 다시 시도해 주세요.");
   } finally {
-    if (button) button.disabled = false;
+    for (const button of buttons) button.disabled = false;
   }
 });
 

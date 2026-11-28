@@ -2,6 +2,14 @@ import os
 from pathlib import Path
 
 
+def photo_skip_allowed(*, account_mode=False):
+    """Only the explicitly enabled local emulator demo may skip evidence photos."""
+    return (not account_mode
+            and os.environ.get('RENTO_TEST_PHOTO_SKIP') == '1'
+            and os.environ.get('FIRESTORE_EMULATOR_HOST', '').split(':')[0]
+            in ('localhost', '127.0.0.1'))
+
+
 def load_env():
     if os.environ.get('RENTO_SKIP_ENV') == '1':
         return

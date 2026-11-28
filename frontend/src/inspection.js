@@ -45,6 +45,7 @@ export function inspectionRecord(rental, item) {
 }
 
 export function currentResult(record, id) {
+  if (record.beforePhotoSkipped || record.afterPhotoSkipped) return null;
   const result = record.results?.[id];
   return result?.beforeSource === record.before[id]?.source && result?.afterSource === record.after[id]?.source ? result : null;
 }
@@ -60,6 +61,7 @@ export function completeDraft(draft) {
 }
 
 export function comparisonSummary(record, feedback) {
+  if (record.beforePhotoSkipped || record.afterPhotoSkipped) return { kind: "manual", title: "사진 미등록 · AI 비교 생략", detail: "테스트용으로 사진 촬영을 생략한 거래예요. 물품 상태는 직접 확인해 주세요." };
   const views = record.plan.views.filter((v) => v.compare);
   const results = views.map((v) => currentResult(record, v.id));
   if (feedback?.busy) return { kind: "pending", title: "반납 사진을 확인하고 있어요", detail: `사진 확인 ${feedback.completed || 0}/${feedback.total || views.length}` };

@@ -2,6 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { comparisonSummary, completeDraft, currentResult, inspectionPlan, inspectionRecord } from "../src/inspection.js";
 import { profilePage, tradePage } from "../src/views.js";
+import { inspectionCard } from "../src/inspection-view.js";
+
+test("skipped test photos remain visibly missing and never expose an all-clear or AI retry", () => {
+  const record = { plan: inspectionPlan({ title: "드릴" }), before: {}, after: {},
+    beforePhotoSkipped: true, afterPhotoSkipped: true,
+    results: { left: { status: "clear" } } };
+  assert.equal(currentResult(record, "left"), null);
+  assert.match(comparisonSummary(record).title, /사진 미등록/);
+  const html = inspectionCard({ inspection: record }, { title: "드릴" }, null, null, (s) => s);
+  assert.match(html, /사진 미등록 · AI 비교 생략/);
+  assert.ok(!html.includes('data-action="analyze-trade"'));
+  assert.ok(!html.includes('눈에 띄는 변화가 없어요'));
+});
 
 test("plans require multiple item-specific views; flexible kits use direct checks", () => {
   for (const title of ["전동드릴", "빔프로젝터", "접이식 사다리", "미니 카메라"]) {

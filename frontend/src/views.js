@@ -1,3 +1,4 @@
+import { reservationPicker } from "./reservation-picker.js";
 import { profileImage } from "./accounts.js";
 import { inquiryPartner } from "./inquiry.js";
 import { depositBlock, depositPolicyLabel, listingDeposit, VALUE_PENDING } from "./listing-pricing.js";
@@ -24,9 +25,10 @@ const empty = (heading, detail) => `<div class="empty"><strong>${heading}</stron
 const badge = (status) => `<span class="badge" data-status="${status}">${statuses[status]}</span>`;
 const button = (text, cls = "primary") => `<button class="button ${cls}" type="submit">${text}</button>`;
 
-export function pageHeader(title, back) {
+export function pageHeader(title, back, symbol) {
   return `<header class="page-header">
     ${back ? `<a class="icon-button" href="${back}" aria-label="뒤로">${icon("back")}</a>` : ""}
+    ${symbol ? `<span class="page-section-icon">${icon(symbol)}</span>` : ""}
     <h1>${title}</h1>
   </header>`;
 }
@@ -90,22 +92,6 @@ export function listingRows(items, isFavorite, availability, recommendations = n
           </button>
         </div>
 
-        <a class="listing-owner"
-           href="#person/${encodeURIComponent(item.owner)}">
-
-          <span class="owner-avatar">
-            ${profileImage(profilePhotos[item.owner], escape) || icon("user")}
-          </span>
-
-          <span class="owner-info">
-            <strong>
-              ${escape(displayNames[item.owner] || people[item.owner]?.name || "공급자 프로필")}
-            </strong>
-            <small>프로필 및 거래 후기 보기</small>
-          </span>
-
-          <span class="owner-arrow">›</span>
-        </a>
         ${managing ? `<div class="listing-management">
           <p class="hint listing-management-period">${item.availableFrom && item.availableTo
             ? `대여 가능 기간 · ${escape(dates(item.availableFrom, item.availableTo))}` : "대여 가능 기간 · 제한 없음"}</p>
@@ -123,29 +109,28 @@ export function home({ area, query, category, date, maxPrice, rows, unread }) {
   const categoryIcons = { "전체": "grid", "공구": "tool", "디지털": "digital", "생활용품": "living", "캠핑·레저": "tent" };
   const filterSummary = [date.start && dates(date.start, date.end), maxPrice !== null && `하루 ${won(maxPrice)} 이하`].filter(Boolean).join(" · ");
   return `
-    <div class="home-hero">
-    <header class="home-header">
-      <h1 class="brand" aria-label="렌토 RENTO"><span class="brand-symbol">${icon("mark")}</span><span>RENTO</span></h1>
-      <div class="header-actions">
-        <button class="area-button" data-action="area" aria-label="동네 변경">${icon("pin")}<span>${area}</span>${icon("chevronDown")}</button>
-        <button class="icon-button notification" data-action="notices" aria-label="알림">${icon("bell")}${unread ? '<i aria-label="새 알림"></i>' : ""}</button>
+    <div class="home-top">
+      <header class="home-header">
+        <h1 class="brand" aria-label="렌토 RENTO"><span class="brand-symbol">${icon("mark")}</span><span>RENTO</span></h1>
+        <div class="header-actions">
+          <button type="button" class="area-button" data-action="area" aria-label="동네 변경">${icon("pin")}<span>${escape(area)}</span>${icon("chevronDown")}</button>
+          <button type="button" class="icon-button notification" data-action="notices" aria-label="알림">${icon("bell")}${unread ? '<i aria-label="새 알림"></i>' : ""}</button>
+        </div>
+      </header>
+      <div class="home-filters">
+        <label class="search">${icon("search")}<input id="search" type="search" aria-label="물품 검색" placeholder="어떤 물건을 빌릴까요?" value="${escape(query)}"></label>
+        <div class="categories" aria-label="물품 분류">${categories.map((name) =>
+          `<button type="button" class="chip" aria-pressed="${name === category}" data-action="category" data-id="${name}">${icon(categoryIcons[name])}<span>${name}</span></button>`).join("")}</div>
       </div>
-    </header>
-    <div class="hero-content">
-      <div class="home-intro"><h2>사는 대신 빌려요,</h2><p class="brand-slogan" lang="en"><span class="slogan-ren">REN</span><span class="slogan-t">t</span>, <span class="slogan-to">TO</span>gether!</p><p class="hero-description">우리 동네에서 시작되는 새로운 공유 라이프</p></div>
-      <label class="search">${icon("search")}<input id="search" type="search" aria-label="물품 검색" placeholder="어떤 물건을 빌릴까요?" value="${escape(query)}"></label>
-    </div>
     </div>
     <div class="home-main">
-      <div class="categories" aria-label="물품 분류">${categories.map((name) =>
-        `<button type="button" class="chip" aria-pressed="${name === category}" data-action="category" data-id="${name}">${icon(categoryIcons[name])}<span>${name}</span></button>`).join("")}</div>
-      <div class="shortcuts home-shortcuts">
-        <button type="button" class="rental-date-button" data-action="filter-dates"><span class="date-icon">${icon("calendar")}</span><span class="date-copy"><strong>언제 빌릴까요?</strong><span>${date.start ? `${dates(date.start, date.end)} · 변경하기` : "대여할 날짜를 선택해 주세요"}</span></span>${icon("right")}</button>
-        <button type="button" class="ai-recommend-card" data-action="recommend">${icon("sparkle")}<span class="ai-recommend-copy"><strong>뭘 빌려야 할지 고민된다면?</strong><span>렌토 AI가 필요한 물건을 찾아드려요</span></span>${icon("right")}</button>
+      <div class="home-shortcuts">
+        <button type="button" class="home-shortcut rental-date-button" data-action="filter-dates"><span class="home-shortcut-icon">${icon("calendar")}</span><span class="home-shortcut-copy"><strong>대여 날짜</strong><small>${date.start ? "선택한 기간 변경" : "기간 선택"}</small></span></button>
+        <button type="button" class="home-shortcut ai-recommend-card" data-action="recommend"><span class="home-shortcut-icon">${icon("sparkle")}</span><span class="home-shortcut-copy"><strong>AI 추천</strong><small>필요한 물품 찾기</small></span></button>
       </div>
       ${filterSummary ? `<div class="applied-filter">${filterSummary}<button class="icon-button" data-action="clear-filters" aria-label="날짜 및 가격 필터 지우기">${icon("close")}</button></div>` : ""}
       <section aria-labelledby="listing-title">
-        <div class="feed-title"><h2 id="listing-title">우리 동네 대여 물품 <small class="hint">추천순</small></h2><a class="button primary add-link" href="#new">${icon("plus")}물품 등록</a></div>
+        <div class="feed-title"><h2 id="listing-title">우리 동네 대여 물품</h2><a class="button primary add-link" href="#new">${icon("plus")}물품 등록</a></div>
         <div id="listings" aria-live="polite">${rows}</div>
       </section>
     </div>`;
@@ -160,7 +145,7 @@ export function rentalEstimate(item, start, end, policy = null, lifecycleMode = 
   return `대여료 ${won(fee)} (${days}일) + 보증금 ${won(deposit)} = ${won(fee + deposit)}`;
 }
 
-export function itemPage(item, role, date, selectedPhoto, policy = null, requireValue = false, lifecycleMode = false) {
+export function itemPage(item, role, date, selectedPhoto, policy = null, requireValue = false, lifecycleMode = false, profiles = {}) {
   const blocked = depositBlock(item, policy, requireValue);
   const deposit = blocked ? null : listingDeposit(item, policy);
   const owner = item.owner === role;
@@ -172,8 +157,7 @@ export function itemPage(item, role, date, selectedPhoto, policy = null, require
       <p class="form-error" role="alert" hidden></p>
       ${button("중고 가액 저장")}</form>`;
   } else if (owner || role === "admin") {
-    const notice = owner && requireValue ? "내가 등록한 물품이에요."
-      : "대여자 프로필로 전환하면 이 물품에 대여를 신청할 수 있어요.";
+    const notice = owner ? "내가 등록한 물품이에요." : "관리자 열람 화면이에요.";
     action = `<p class="notice">${notice}</p>`;
   } else if (blocked) {
     const notice = blocked === VALUE_PENDING ? "공급자가 중고 가액과 근거를 추가하면 대여 조건을 확인할 수 있어요."
@@ -205,16 +189,28 @@ export function itemPage(item, role, date, selectedPhoto, policy = null, require
       ${item.weekends ? '<p class="availability">주말 대여 전용</p>' : ""}
       ${item.availableFrom ? `<p class="availability">대여 가능 기간 · ${dates(item.availableFrom, item.availableTo)}</p>` : ""}
     </section>
+        <a class="listing-owner detail-owner"
+           href="#person/${encodeURIComponent(item.owner)}">
+
+          <span class="owner-avatar">
+            ${profileImage(profiles.profilePhotos?.[item.owner], escape) || icon("user")}
+          </span>
+
+          <span class="owner-info">
+            <strong>
+              ${escape(profiles.displayNames?.[item.owner] || people[item.owner]?.name || "공급자 프로필")}
+            </strong>
+            <small>프로필 및 거래 후기 보기</small>
+          </span>
+
+          <span class="owner-arrow">›</span>
+        </a>
     ${action}
   </div>`;
 }
 
 export function dateInputs(date = {}, { required = true } = {}) {
-  const min = localDay();
-  return `<div class="field-pair">
-    <label>시작일<input name="start" type="date" min="${min}" value="${date.start ?? ""}" ${required ? "required" : ""}></label>
-    <label>종료일<input name="end" type="date" min="${date.start || min}" value="${date.end ?? ""}" ${required ? "required" : ""}></label>
-  </div>`;
+  return reservationPicker(date, { dateOnly: true });
 }
 
 export function registerPage(role, area, draft = newListingDraft(area), policy = null) {
@@ -222,7 +218,7 @@ export function registerPage(role, area, draft = newListingDraft(area), policy =
     ? `<header class="page-header"><button class="icon-button" data-action="listing-prev" aria-label="이전 단계">${icon("back")}</button><h1>물품 등록</h1></header>`
     : pageHeader("물품 등록", "#home");
   return header + `<div class="content registration-content">${role === "admin"
-    ? '<p class="notice">대여자 또는 공급자 프로필에서 물품을 등록할 수 있어요.</p>'
+    ? '<p class="notice">일반 계정으로 전환하면 물품을 등록할 수 있어요.</p>'
     : registrationForm(draft, escape, policy)}</div>`;
 }
 
@@ -238,10 +234,7 @@ export function rentalsPage(historical, catalog, role, direction) {
   const admin = role === "admin";
   const visible = historical.filter((rental) => admin ? (rental.status === "disputed" || rental.noShow?.status === "reported" || rental.finance?.depositHolds?.length)
     : direction === "out" ? rental.lenderId === role : rental.renterId === role);
-  return `<header class="chat-hub-header personal-hub-header">
-    <div class="chat-hub-title"><span class="chat-hub-symbol">${icon("calendar")}</span><h1>${admin ? "분쟁 검토" : "내 대여"}</h1></div>
-    <p>${admin ? "확인이 필요한 거래를 살펴보세요" : "빌리고 나누는 일상, 내 거래를 한눈에"}</p>
-  </header><div class="content rentals-hub">
+  return pageHeader(admin ? "분쟁 검토" : "내 대여", null, "calendar") + `<div class="content rentals-hub">
     ${admin ? "" : `<div class="segments" aria-label="대여 역할">
       <button data-action="direction" data-id="in" aria-pressed="${direction === "in"}">빌리는 물품</button>
       <button data-action="direction" data-id="out" aria-pressed="${direction === "out"}">빌려주는 물품</button>
@@ -269,8 +262,8 @@ export function tradePage(rental, item, role, feedback, selectedView, lifecycleM
   if (status === "pending") actions = owns ? tradeButton("신청 승인", "confirm") + tradeButton("거절", "reject", "secondary")
     : borrows ? tradeButton("신청 철회", "cancel", "secondary") : "";
   else if (status === "payment_pending") actions = (owns || borrows) ? tradeButton("예약 취소", "cancel", "secondary") : "";
-  else if (status === "confirmed") actions = (owns ? tradeButton("대여 전 사진 촬영", "handoff") : "") + tradeButton("예약 취소", "cancel", "secondary");
-  else if (status === "handover") actions = (borrows ? tradeButton("물품·구성품 수령 확인", "receive") : "") + ((owns || borrows) ? tradeButton("인도 전 예약 취소", "cancel", "secondary") : "");
+  else if (status === "confirmed") actions = (owns ? tradeButton(item.inspectionPlan ? "인도 전 상태 확인" : "대여 전 사진 촬영", "handoff") : "") + tradeButton("예약 취소", "cancel", "secondary");
+  else if (status === "handover") actions = (owns ? tradeButton("인도 사진·상태 수정", "handoff-update", "secondary") : "") + (borrows ? tradeButton("물품·구성품 수령 확인", "receive") : "") + ((owns || borrows) ? tradeButton("인도 전 예약 취소", "cancel", "secondary") : "");
   else if (status === "active" && borrows) actions = tradeButton("반납 사진 촬영", "return");
   else if (status === "checking" && borrows) actions = `<button class="button secondary" data-action="trade-action" data-id="reshoot" ${feedback?.busy ? "disabled" : ""}>반납 사진 다시 촬영</button>`;
   else if (status === "checking" && owns) actions = tradeButton("반납 확인 · 거래 완료", "complete") + tradeButton("손상·누락 신고", "dispute", "secondary");
@@ -355,13 +348,10 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
     (a.last?.sentAt ?? a.createdAt)
   );
 
-  return `<header class="chat-hub-header">
-      <div class="chat-hub-title"><span class="chat-hub-symbol">${icon("chat")}</span><h1>채팅</h1></div>
-      <p>이웃과 나누는 대화, 더 편안한 거래의 시작</p>
-    </header>
-    <div class="content chat-hub">
-      <a class="chat-hub-discover" href="#home">${icon("search")}<span>빌릴 물품 찾아보기</span>${icon("right")}</a>
-      <section class="chat-hub-conversations" aria-labelledby="chat-hub-heading">
+  return `<div class="chat-hub">
+    <div class="chat-hub-overview">
+    ${pageHeader("채팅", null, "chat")}
+      <section class="content chat-hub-conversations" aria-labelledby="chat-hub-heading">
       <div class="chat-hub-section-title"><h2 id="chat-hub-heading">거래 대화</h2><span class="chat-hub-count">${conversations.length}개</span></div>
       <div class="chat-list ${conversations.length ? 'has-conversations' : 'is-empty'}">
       ${conversations.length
@@ -418,18 +408,16 @@ export function chatPage(rentals, catalog, role, threads, canChat, inquiries = [
              <span class="chat-hub-empty-icon">${icon("chat")}</span>
              <h3>아직 대화가 없어요</h3>
              <p>물품이 궁금할 땐 문의하고,<br>예약 후에는 만날 시간과 장소를 정해요.</p>
-             <a class="button chat-hub-browse" href="#home">빌릴 물품 둘러보기</a>
            </div>`}
       </div>
       </section>
+    </div>
       <section class="chat-hub-guide" aria-labelledby="chat-guide-heading">
-        <div class="chat-hub-section-title"><h2 id="chat-guide-heading">이웃과의 약속, 채팅으로 편하게</h2><span class="chat-guide-label">대화 가이드</span></div>
-        <div class="chat-guide-row"><span class="chat-guide-icon peach">${icon("calendar")}</span><div><h3>언제 어디서 만날까요?</h3><p>예약 후 만날 시간과 장소를 함께 정해요.</p></div></div>
-        <div class="chat-guide-row"><span class="chat-guide-icon sage">${icon("photo")}</span><div><h3>물품 상태도 미리 확인해요</h3><p>구성품과 사용 방법을 물어보고 상태를 확인해요.</p></div></div>
-        <div class="chat-hub-shortcuts">
-          <a href="#rentals">${icon("calendar")}<span>내 대여 확인</span>${icon("right")}</a>
-          <a href="#home">${icon("search")}<span>물품 둘러보기</span>${icon("right")}</a>
-        </div>
+        <h2 id="chat-guide-heading">대화 가이드</h2>
+        <ul>
+          <li>예약 후 만날 시간과 장소를 함께 정해요.</li>
+          <li>물품 상태와 구성품, 사용 방법을 미리 확인해요.</li>
+        </ul>
       </section>
     </div>`;
 }
@@ -592,14 +580,11 @@ export function conversationPage(rental, item, messages, role, profiles = {}) {
 
 export function profilePage(role, savedCount, listingCount, account = null, profile = {}) {
   const displayName = profile.displayName ?? account?.displayName;
-  return `<header class="chat-hub-header personal-hub-header">
-    <div class="chat-hub-title"><span class="chat-hub-symbol">${icon("user")}</span><h1>내 정보</h1></div>
-    <p>이웃과 함께 쌓아가는 나의 공유 생활</p>
-  </header><div class="content stack profile-content profile-hub">
+  return pageHeader("내 정보", null, "user") + `<div class="content stack profile-content profile-hub">
     <div class="profile">
       <div class="avatar">${profileImage(profile.photo, escape) || icon("user")}</div>
       <div><h2>${account ? escape(displayName ? displayName + "님" : "내 계정") : people[role].name + "님"}</h2>
-      <p class="muted">${account ? escape(account.email) : escape(people[role].neighborhood + " · 데모 프로필")}</p>
+      <p class="muted">${account ? escape(account.email) : escape(people[role].neighborhood + " · 테스트 계정")}</p>
       ${account && profile.area ? `<p class="muted">거주 지역 · ${escape(profile.area)}</p>` : ""}</div>
     </div>
     ${account ? '<button class="button secondary" type="button" data-action="edit-profile">프로필 수정</button>' : ""}
@@ -609,17 +594,57 @@ export function profilePage(role, savedCount, listingCount, account = null, prof
       <a href="#saved">${icon("heart")}관심 물품<span>${savedCount}개</span>${icon("right")}</a>
       <a href="#my-listings">${icon("photo")}내가 올린 물품<span>${listingCount}개</span>${icon("right")}</a>
       <a href="#membership">${icon("sparkle")}구독 혜택${icon("right")}</a>
+      <button type="button" data-action="view-reputation">${icon("star")}거래 후기${icon("right")}</button>
     </div></section>
     ${account ? `<form class="profile-section" data-form="logout">
       <button class="button secondary" type="submit">로그아웃</button>
       <p class="form-error" role="alert" hidden></p>
     </form>` : `<section class="stack compact profile-section demo-settings">
-      <h2>데모 프로필 전환</h2>
+      <h2>테스트 계정 전환</h2>
       <div class="segments">${Object.entries(people).map(([id, person]) => `
-        <button data-action="role" data-id="${id}" aria-pressed="${role === id}">${person.name}</button>`).join("")}</div>
-      <p class="hint">같은 브라우저에서 신청·승인·분쟁 검토를 시연할 수 있어요.</p>
+        <button data-action="role" data-id="${id}" aria-pressed="${role === id}">${id === "admin" ? "관리자 시연" : person.name}</button>`).join("")}</div>
     </section>`}
   </div>`;
+}
+
+export function reputationPanel(stats) {
+  const { completed, reviews } = stats;
+  const average = reviews.length ? (reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length).toFixed(1) : "평가 전";
+  return `<div class="reputation-panel">
+    <dl class="reputation-summary">
+      <div class="reputation-average"><dt>평균 별점</dt><dd>${icon("star")}${average}</dd></div>
+      <div><dt>후기</dt><dd>${reviews.length}개</dd></div>
+      <div><dt>완료 거래</dt><dd>${completed}건</dd></div>
+    </dl>
+    <section class="reputation-reviews" aria-labelledby="received-reviews-title">
+      <h3 id="received-reviews-title">거래 후기</h3>
+      ${reviews.length ? `<ul>${reviews.map(({rating, text}) => `<li>
+        <span class="reputation-stars" aria-label="별점 ${rating}점" role="img">${"★".repeat(rating)}${"☆".repeat(5 - rating)}</span>
+        <p>${escape(text)}</p>
+      </li>`).join("")}</ul>` : '<p class="reputation-empty">아직 받은 거래 후기가 없어요.</p>'}
+    </section>
+  </div>`;
+}
+
+export function reviewForm(rental, item, role, profiles) {
+  const partner = rentalChatProfile(rental, role, profiles);
+  return `<form data-form="review" data-id="${escape(rental.id)}" class="form-card plain review-form">
+    <div class="review-context">
+      ${image(item ?? {}, "review-context-photo")}
+      <div><strong>${escape(item?.title || "대여 물품")}</strong><small>${escape(partner.name)} · 거래 완료</small></div>
+    </div>
+    <fieldset class="review-rating">
+      <legend>이번 거래는 어땠나요?</legend>
+      <div class="review-rating-options">${[1, 2, 3, 4, 5].map(value => `<label>
+        <input type="radio" name="rating" value="${value}" aria-label="${value}점" required><span aria-hidden="true">★</span>
+      </label>`).join("")}</div>
+      <p class="review-rating-caption" aria-live="polite">별점을 선택해 주세요.</p>
+    </fieldset>
+    <label>후기<textarea name="note" maxlength="500" rows="3" placeholder="거래하면서 느낀 점을 남겨주세요." required></textarea></label>
+    <p class="review-privacy">${icon("lock")}후기는 양쪽이 작성하거나 거래 완료 7일 후 공개돼요.</p>
+    <p class="form-error" role="alert" hidden></p>
+    <button class="button primary" type="submit">후기 등록</button>
+  </form>`;
 }
 
 export function comparePage(demo) {

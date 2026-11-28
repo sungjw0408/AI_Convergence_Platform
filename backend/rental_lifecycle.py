@@ -159,32 +159,55 @@ def available(rentals, item, start, end, zone, now, ignored=None):
             raise ValueError('기존 예약 일정과 겹쳐요.')
 
 
-def evidence(rental, data, phase):
+def evidence(rental, data, phase, *, allow_photo_skip=False, listing_item=None, now=None, review_id=None):
     record = data.get('inspection')
     require(isinstance(record, dict), '부위별 촬영 기록이 필요해요.')
     plan = record.get('plan', {})
     views = plan.get('views', [])
+    record = deepcopy(record)
     photos = record.get(phase, {})
+    reused = phase == 'before' and data.get('reuseListingPhotos') is True
+    if reused:
+        require(listing_item and plan == listing_item.get('inspectionPlan'), '등록된 상태 사진의 촬영 목록을 확인해 주세요.')
+        require(set(data.get('confirmedViews', [])) == {v['id'] for v in views}, '모든 부위를 실제 상태와 비교해 확인해 주세요.')
+        registered = {p.get('id'): p for p in listing_item.get('photos', []) if p.get('origin') == 'camera'}
+        for view_id, photo in photos.items():
+            require(isinstance(photo, dict), '부위별 사진을 확인해 주세요.')
+            if photo.get('listingPhotoId'):
+                original = registered.get(photo['listingPhotoId'])
+                require(original and original.get('viewId') == view_id and original.get('source') == photo.get('source'), '등록된 동일 부위의 상태 사진만 재사용할 수 있어요.')
+                photos[view_id] = {**deepcopy(original), 'listingPhotoId':original['id'], 'sourceKind':'listing'}
+            else:
+                photo['sourceKind'] = 'handoff'
+        record['handoffReview'] = {'listingId':listing_item['id'], 'revisionId':review_id, 'lenderConfirmedAt':now, 'renterConfirmedAt':None}
+    elif phase == 'before':
+        record.pop('handoffReview', None)
     require(isinstance(views, list) and 1 <= len(views) <= 8 and isinstance(photos, dict), '촬영 목록을 확인해 주세요.')
     require(all(isinstance(v, dict) and isinstance(v.get('id'), str) for v in views), '촬영 부위를 확인해 주세요.')
-    require(set(photos) == {v['id'] for v in views}, '모든 부위를 촬영해 주세요.')
-    require(all(isinstance(p, dict) and isinstance(p.get('source'), str) and re.fullmatch(r'capture:[a-f0-9-]{36}', p['source'])
+    skip = data.get('skipPhotos') is True
+    require(not skip or allow_photo_skip, '사진 생략은 로컬 테스트에서만 사용할 수 있어요.')
+    view_ids = {v['id'] for v in views}
+    require(set(photos) <= view_ids if skip else set(photos) == view_ids, '모든 부위를 촬영해 주세요.')
+    require(all(isinstance(p, dict) and isinstance(p.get('source'), str) and (re.fullmatch(r'capture:[a-f0-9-]{36}', p['source']) or (reused and p.get('sourceKind') == 'listing' and p.get('listingPhotoId') in registered))
                 for p in photos.values()), '앱에서 촬영한 상태 사진이 필요해요.')
     checks = plan.get('checks', [])
     require(isinstance(checks, list) and all(isinstance(c, dict) and isinstance(c.get('id'), str) for c in checks), '확인 항목을 점검해 주세요.')
     require(set(record.get(phase + 'Checks', [])) == {c['id'] for c in checks}, '구성품과 상태를 확인해 주세요.')
     if phase == 'after':
         previous = rental['inspection']
-        require(all(record.get(k) == previous.get(k) for k in ('plan', 'before', 'beforeChecks', 'beforeNote')),
+        require(all(record.get(k) == previous.get(k) for k in ('plan', 'before', 'beforeChecks', 'beforeNote', 'beforePhotoSkipped', 'handoffReview')),
                 '대여 전 사진은 변경할 수 없어요.')
     rental['inspection'] = deepcopy(record)
     if phase == 'after':
         rental.pop('photoAnalysis', None)
-    rental[phase] = next(iter(photos.values()))['source']
+    rental['inspection'][phase + 'PhotoSkipped'] = skip and set(photos) != view_ids
+    if rental['inspection'].get('beforePhotoSkipped') or rental['inspection'].get('afterPhotoSkipped'):
+        rental['inspection']['results'] = {}
+    rental[phase] = next(iter(photos.values()), {}).get('source')
 
 
 def execute(records, items, actor, action, data, request_id, now, admin=False, *,
-            deposit_policy=None, require_value=False):
+            deposit_policy=None, require_value=False, allow_photo_skip=False):
     """Mutates a private snapshot inside the caller's serializable transaction."""
     require(isinstance(data, dict), '요청 내용을 확인해 주세요.')
     require(isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_-]{8,100}', request_id), '중복 방지 요청 번호가 필요해요.')
@@ -251,16 +274,23 @@ def execute(records, items, actor, action, data, request_id, now, admin=False, *
         elif action == 'cancel':
             require((owns or borrows) and status in PRE_HANDOVER and not rental.get('receivedAt'), '인도 이후에는 예약 취소할 수 없어요.')
             cancel(rental, now)
-        elif action == 'handoff':
-            require(owns and status == 'confirmed' and rental['finance']['paid'], '결제 완료 후 공급자가 촬영해 주세요.')
-            evidence(rental, data, 'before')
+        elif action in ('handoff', 'revise_handoff'):
+            require(owns and status == ('confirmed' if action == 'handoff' else 'handover') and rental['finance']['paid'], '결제 완료 후 공급자가 촬영해 주세요.')
+            evidence(rental, data, 'before', allow_photo_skip=allow_photo_skip, listing_item=item, now=now, review_id=request_id)
             rental.update(status='handover', handoffRecordedAt=now)
         elif action == 'receive':
             require(borrows and status == 'handover', '수령 확인할 수 없는 거래예요.')
+            review = rental.get('inspection', {}).get('handoffReview')
+            if review:
+                require(data.get('handoffRevision') == review.get('revisionId'), '사진이 변경됐어요. 창을 닫고 최신 상태를 다시 확인해 주세요.')
+                plan = rental['inspection']['plan']
+                require(set(data.get('confirmedViews', [])) == {v['id'] for v in plan['views']}, '모든 부위의 상태를 확인한 뒤 수령해 주세요.')
+                require(set(data.get('confirmedChecks', [])) == {c['id'] for c in plan.get('checks', [])}, '구성품과 작동 상태를 확인해 주세요.')
+                review['renterConfirmedAt'] = now
             rental.update(status='active', receivedAt=now)
         elif action in ('return', 'reshoot'):
             require(borrows and status == ('active' if action == 'return' else 'checking'), '반납 사진을 저장할 수 없는 상태예요.')
-            evidence(rental, data, 'after')
+            evidence(rental, data, 'after', allow_photo_skip=allow_photo_skip)
             rental.setdefault('firstReturnRequestedAt', now)
             rental['status'] = 'checking'
         elif action == 'complete':
@@ -404,7 +434,7 @@ def lifecycle_notices(before, after, now):
     notices = []
     labels = {'pending': '새 대여 신청', 'payment_pending': '공급자 승인 · 테스트 결제 대기',
               'confirmed': '테스트 결제 완료 · 예약 확정', 'expired': '신청 또는 결제 기한 만료',
-              'canceled': '예약 취소 · 테스트 환불 내역 확인', 'handover': '대여 전 촬영 완료 · 수령 확인 대기',
+              'canceled': '예약 취소 · 테스트 환불 내역 확인', 'handover': '물품 전달 준비 완료 · 수령 확인 대기',
               'active': '물품 수령 확인', 'checking': '반납 요청 도착', 'complete': '반납 확인 · 정산 내역 확인',
               'rejected': '대여 신청 거절'}
     for record in after:

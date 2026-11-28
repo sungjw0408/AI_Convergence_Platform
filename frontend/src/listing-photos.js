@@ -8,7 +8,7 @@ export function newListingDraft(area) {
   const plan = inspectionPlan({ title: "" });
   const draft = { fields: { title: "", description: "", category: "", price: "", neighborhood: area, start: "", end: "",
       valueWon: "", valueEvidence: "", modelName: "", condition: "", usageHistory: "", purchaseMonth: "" },
-    plan, photos: [], advice: null, coverId: null, activeViewId: plan.views[0].id, step: 0, photoMode: "capture", busy: false, error: "" };
+    plan, photos: [], introPhotos: [], advice: null, coverId: null, activeViewId: plan.views[0].id, step: 0, photoMode: "capture", busy: false, error: "" };
   captureContexts.set(draft, {});
   return draft;
 }
@@ -62,7 +62,8 @@ export function removeListingPhoto(draft, photoId) {
   const photo = draft.photos.find((p) => p.id === photoId);
   if (photo?.preview) URL.revokeObjectURL(photo.preview);
   draft.photos = draft.photos.filter((p) => p.id !== photoId);
-  if (draft.coverId === photoId) draft.coverId = draft.photos[0]?.id || null;
+  if (draft.publicPhotoIds) draft.publicPhotoIds = draft.publicPhotoIds.filter(id => id !== photoId);
+  if (draft.coverId === photoId) draft.coverId = draft.publicPhotoIds?.[0] || draft.photos[0]?.id || draft.introPhotos?.[0]?.id || null;
   draft.activeViewId = missingListingViews(draft)[0]?.id || draft.plan.views[0].id;
 }
 
@@ -77,5 +78,5 @@ export function replaceListingPhoto(draft, photoId, capture) {
 }
 
 export function listingSources(item) {
-  return [item.image, ...(item.photos || []).map((photo) => photo.source)].filter(Boolean);
+  return [item.image, ...(item.photos || []).map((photo) => photo.source), ...(item.presentationPhotos || []).map(photo => photo.source)].filter(Boolean);
 }

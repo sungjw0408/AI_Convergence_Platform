@@ -9,6 +9,7 @@ from flask import Flask, g, jsonify, request
 from markupsafe import escape
 from werkzeug.exceptions import RequestEntityTooLarge
 from rental_database import register_database
+from env_config import photo_skip_allowed
 from listing_pricing import load_deposit_policy
 from listing_assistance import suggest_listing
 from listing_price_advice import suggest_price, validate_price_request
@@ -40,6 +41,8 @@ def home():
         mode = "accounts" if accounts_enabled else "firestore"
         metadata.append(f'<meta name="rento-database" content="{mode}">')
         metadata.append('<meta name="rento-lifecycle" content="enabled">')
+        if photo_skip_allowed(account_mode=accounts_enabled):
+            metadata.append('<meta name="rento-test-photo-skip" content="enabled">')
     if deposit_policy is not None:
         metadata.append(f'<meta name="rento-deposit-policy" content="{escape(json.dumps(deposit_policy))}">')
     html = (Path(app.static_folder) / "index.html").read_text(encoding="utf-8")
