@@ -606,7 +606,12 @@ def validate_inspection(record, field):
             require(bool(regions))
 
 
+# 예약 및 대여 상태 검증
 def validate_rental(root, transaction, uid, record, current, policy):
+    if current and current.get("lifecycleVersion") == 1:
+        # Command-only state machine: never accept a client-provided payment/state change.
+        allowed = {"inspection", "photoAnalysis", "review", "feedback"}
+        require(all(record.get(k) == current.get(k) for k in record.keys() | current.keys() if k not in allowed))
     require(matches(IDS, record.get("itemId")))
 
     if not current:

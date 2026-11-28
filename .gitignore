@@ -10,9 +10,8 @@ firebase-data/
 .env.rento-auth
 .env.rento-test03
 
+backend/.rento-data/
+backend/.venv-team2/
 .env
 
 *.bak
-
-backend/.rento-data/
-backend/.venv-team2/

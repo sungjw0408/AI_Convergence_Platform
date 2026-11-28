@@ -202,6 +202,24 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.call('propose_compensation','lender',amount=30001,basis='used_value',evidence='중고 가액')
         with self.assertRaises(ValueError): self.call('complete','stranger')
 
+    def test_completed_lifecycle_accepts_both_reviews_without_finance_changes(self):
+        from rental_lifecycle import validate_feedback_update
+        self.returned(); self.call('complete', 'lender')
+        before = copy.deepcopy(self.r['finance'])
+        record = copy.deepcopy(self.r)
+        record['feedback'] = {'renter': {'rating': 5, 'text': '감사합니다'}}
+        validate_feedback_update(self.r, record, 'renter', self.now)
+        current = record
+        record = copy.deepcopy(current)
+        record['feedback'] = {'lender': {'rating': 4, 'text': '잘 사용했어요'}}
+        validate_feedback_update(current, record, 'lender', self.now)
+        self.assertEqual(set(record['feedback']), {'renter', 'lender'})
+        self.assertEqual(record['finance'], before)
+        with self.assertRaises(ValueError):
+            validate_feedback_update(record, record, 'stranger', self.now)
+        with self.assertRaises(ValueError):
+            validate_feedback_update(record, record, 'renter', self.now)
+
 
 class StoreTests(unittest.TestCase):
     def setUp(self):

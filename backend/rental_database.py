@@ -73,7 +73,7 @@ def register_database(app, client=None, space=None, account_mode=False, deposit_
     if client is None and not project:
         return False
 
-    from google.api_core.exceptions import GoogleAPICallError
+    from google.api_core.exceptions import AlreadyExists, GoogleAPICallError
     from google.cloud import firestore
     from google.cloud.firestore_v1.base_query import FieldFilter
 
@@ -109,16 +109,18 @@ def register_database(app, client=None, space=None, account_mode=False, deposit_
     app.extensions["rento_price_listings"] = price_listings
 
     if account_mode:
-        @firestore.transactional
-        def create_profile(transaction, uid, profile):
+        def create_profile(uid, profile):
             reference = root.collection("profiles").document(uid)
-            if reference.get(transaction=transaction).exists:
+            batch = client.batch()
+            batch.create(reference, {"id": uid, "favorites": [], **profile})
+            batch.set(root, {"revision": firestore.Increment(1)}, merge=True)
+            try:
+                batch.commit()
+            except AlreadyExists:
+                # A concurrent request may already have created this profile.
                 return
-            meta = root.get(transaction=transaction).to_dict() or {}
-            transaction.set(reference, {"id": uid, "favorites": [], **profile})
-            transaction.set(root, {"revision": meta.get("revision", 0) + 1}, merge=True)
 
-        app.extensions["rento_create_profile"] = lambda uid, profile: create_profile(client.transaction(), uid, profile)
+        app.extensions["rento_create_profile"] = create_profile
 
     @firestore.transactional
     def read(transaction, uid, since):
@@ -158,6 +160,14 @@ def register_database(app, client=None, space=None, account_mode=False, deposit_
                 old, new = current.get("inspection", {}), record.get("inspection", {})
                 if {k: v for k, v in old.items() if k != "results"} != {k: v for k, v in new.items() if k != "results"}:
                     raise ValueError("촬영 기록은 촬영 완료 명령으로 저장해 주세요.")
+        if not uid:
+            from rental_lifecycle import validate_feedback_update
+            for name, record in updates:
+                if name == "rentals":
+                    current = app_fields(root.collection(name).document(record["id"]).get(transaction=transaction).to_dict())
+                    if record.get("feedback") != current.get("feedback"):
+                        actor = request.headers.get("X-Rento-Demo-Actor")
+                        validate_feedback_update(current, record, actor, int(time.time() * 1000))
         if uid:
             updates = authorize_updates(root, transaction, uid, updates, deposit_policy)
         for name, record in updates:

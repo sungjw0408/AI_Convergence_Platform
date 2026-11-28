@@ -1,4 +1,4 @@
-﻿import os
+import os
 from pathlib import Path
 
 
@@ -23,4 +23,3 @@ def load_env():
 
         if key and value and not os.environ.get(key):
             os.environ[key] = value
-

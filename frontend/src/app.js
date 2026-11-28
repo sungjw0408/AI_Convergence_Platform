@@ -24,7 +24,7 @@ import {
   aiRoomPage, chatPage, comparePage, conversationPage, inquiryPage, dateInputs, escape, home, itemPage, listingRows,
   membershipPage, missingPage, modal, pageHeader, profilePage, registerPage,
   rentalEstimate, rentalsPage, tradePage,
-} from "./views.js?v=rento-team2-2";
+} from "./views.js?v=rento-team2-develop-5";
 
 import { canReview, reputation, seat, unread, quota, membershipPanel } from "./community.js";
 import {
